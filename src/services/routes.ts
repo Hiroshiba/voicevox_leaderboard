@@ -25,17 +25,28 @@ const rangeSchema = z.object({
   start: z.iso.date(),
   end: z.iso.date(),
 });
+const applicationBasePath = normalizeBasePath(import.meta.env.BASE_URL);
 
-/** URL のハッシュを画面ルートと期間へ変換する。 */
-export function parseAppLocation(hash: string): AppLocation {
-  const raw = hash.startsWith("#") ? hash.slice(1) : hash;
+/** URL を画面ルートと期間へ変換する。 */
+export function parseAppLocation(location: string): AppLocation {
   let url: URL;
   try {
-    url = new URL(raw === "" ? "/" : raw, "https://leaderboard.invalid");
+    url = new URL(location, "https://leaderboard.invalid");
   } catch {
     return { route: { name: "notFound" } };
   }
-  const segments = url.pathname
+  if (url.hash.startsWith("#/")) {
+    try {
+      url = new URL(url.hash.slice(1), "https://leaderboard.invalid");
+    } catch (error) {
+      throw new Error("旧形式の URL を解釈できません。", { cause: error });
+    }
+  }
+  const appPath = removeApplicationBasePath(url.pathname);
+  if (appPath == null) {
+    return { route: { name: "notFound" } };
+  }
+  const segments = appPath
     .split("/")
     .filter((segment) => segment !== "")
     .map(decodeSegment);
@@ -50,16 +61,16 @@ export function parseAppLocation(hash: string): AppLocation {
   };
 }
 
-/** 画面ルートと期間からハッシュリンクを作る。 */
+/** 画面ルートと期間からリンクを作る。 */
 export function routeHref(route: AppRoute, range: DateRange): string {
   const query = new URLSearchParams({
     start: range.start,
     end: range.end,
   });
-  return "#" + routePath(route) + "?" + query.toString();
+  return applicationPath(routePath(route)) + "?" + query.toString();
 }
 
-/** 点数の発生源から詳細ページのハッシュリンクを作る。 */
+/** 点数の発生源から詳細ページのリンクを作る。 */
 export function sourceHref(
   source: SourceReference,
   range: DateRange,
@@ -79,6 +90,11 @@ export function createEntityKey(
   number: number,
 ): string {
   return repository.toLowerCase() + "#" + number;
+}
+
+/** パスがこのアプリケーション内を指すか判定する。 */
+export function isApplicationPath(pathname: string): boolean {
+  return removeApplicationBasePath(pathname) != null;
 }
 
 function parseRouteSegments(segments: string[]): AppRoute {
@@ -162,4 +178,28 @@ function decodeSegment(value: string): string {
   } catch {
     return "";
   }
+}
+
+function normalizeBasePath(value: string): string {
+  const url = new URL(value, "https://leaderboard.invalid/");
+  const pathname = url.pathname;
+  return pathname.endsWith("/") ? pathname : pathname + "/";
+}
+
+function removeApplicationBasePath(pathname: string): string | undefined {
+  const baseWithoutTrailingSlash = applicationBasePath.slice(0, -1);
+  if (pathname === baseWithoutTrailingSlash) {
+    return "/";
+  }
+  if (pathname.startsWith(applicationBasePath) === false) {
+    return undefined;
+  }
+  return "/" + pathname.slice(applicationBasePath.length);
+}
+
+function applicationPath(path: string): string {
+  if (path === "/") {
+    return applicationBasePath;
+  }
+  return applicationBasePath.slice(0, -1) + path;
 }

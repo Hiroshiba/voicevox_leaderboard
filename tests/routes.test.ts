@@ -11,10 +11,10 @@ const range = {
 };
 
 describe("画面ルート", () => {
-  it("PR のハッシュ URL を項目キーへ変換する", () => {
+  it("PR の URL を項目キーへ変換する", () => {
     expect(
       parseAppLocation(
-        "#/pulls/VOICEVOX/voicevox/42?start=2026-07-01&end=2026-07-31",
+        "/pulls/VOICEVOX/voicevox/42?start=2026-07-01&end=2026-07-31",
       ),
     ).toEqual({
       route: {
@@ -27,7 +27,7 @@ describe("画面ルート", () => {
 
   it("人物ページのリンクへ対象期間を含める", () => {
     expect(routeHref({ name: "person", login: "Hiroshiba" }, range)).toBe(
-      "#/people/Hiroshiba?start=2026-07-01&end=2026-07-31",
+      "/people/Hiroshiba?start=2026-07-01&end=2026-07-31",
     );
   });
 
@@ -41,7 +41,18 @@ describe("画面ルート", () => {
         range,
       ),
     ).toBe(
-      "#/issues/voicevox/voicevox/10?start=2026-07-01&end=2026-07-31",
+      "/issues/voicevox/voicevox/10?start=2026-07-01&end=2026-07-31",
     );
+  });
+
+  it("旧形式のハッシュ URL も解釈する", () => {
+    expect(
+      parseAppLocation(
+        "#/people/Hiroshiba?start=2026-07-01&end=2026-07-31",
+      ),
+    ).toEqual({
+      route: { name: "person", login: "Hiroshiba" },
+      range,
+    });
   });
 });

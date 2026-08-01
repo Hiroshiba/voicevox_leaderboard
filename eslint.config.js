@@ -24,6 +24,7 @@ export default [
       globals: {
         console: "readonly",
         fetch: "readonly",
+        MouseEvent: "readonly",
         window: "readonly",
       },
     },

@@ -249,10 +249,10 @@ describe("createSankeyDiagramLayout", () => {
     expect(roles).toEqual(new Set(["pull", "issue", "actor"]));
     expect(kinds).toEqual(new Set(["implementation", "review", "issue"]));
     expect(
-      layout.nodes.every((node) => node.href.startsWith("#")),
+      layout.nodes.every((node) => node.href.startsWith("/")),
     ).toBe(true);
     expect(
-      layout.links.every((link) => link.href.startsWith("#")),
+      layout.links.every((link) => link.href.startsWith("/")),
     ).toBe(true);
   });
 

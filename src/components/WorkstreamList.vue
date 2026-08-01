@@ -109,7 +109,7 @@ function formatLines(lines: number): string {
             </div>
           </dl>
 
-          <div class="mt-4 grid grid-cols-3 overflow-hidden rounded-xl border border-line text-center">
+          <div class="mt-4 grid grid-cols-4 overflow-hidden rounded-xl border border-line text-center">
             <div class="p-2">
               <p class="text-[0.68rem] text-muted">
                 実装
@@ -126,12 +126,20 @@ function formatLines(lines: number): string {
                 {{ formatScore(workstream.reviewPoints) }}
               </p>
             </div>
-            <div class="p-2">
+            <div class="border-r border-line p-2">
               <p class="text-[0.68rem] text-muted">
                 Issue
               </p>
               <p class="font-mono text-sm">
                 {{ formatScore(workstream.issuePoints) }}
+              </p>
+            </div>
+            <div class="p-2">
+              <p class="text-[0.68rem] text-danger">
+                未配分
+              </p>
+              <p class="font-mono text-sm text-danger">
+                {{ formatScore(workstream.unallocatedPoints) }}
               </p>
             </div>
           </div>

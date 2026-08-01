@@ -44,7 +44,7 @@ defineProps<{
         </p>
         <p class="mt-2 text-sm leading-7 text-white/75">
           重要度を実装 65%、人間レビュー 20%、Issue と調査 15%へ配分します。
-          未使用枠は実装者へ戻しません。Bot の活動は配点しません。
+          未使用枠と Bot 作者分は人物へ配点せず、図外へ流出した点として残します。
         </p>
       </div>
     </div>

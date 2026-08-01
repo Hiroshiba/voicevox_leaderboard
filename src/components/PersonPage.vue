@@ -145,7 +145,7 @@ function kindClass(kind: ContributionKind): string {
       <ul class="mt-5 space-y-3">
         <li
           v-for="entry in contributor.entries"
-          :key="entry.kind + ':' + entry.source.type + ':' + entry.source.key + ':' + entry.reason"
+          :key="entry.id"
           class="grid gap-3 rounded-2xl border border-line bg-surface p-4 sm:grid-cols-[7rem_minmax(0,1fr)_6rem]"
         >
           <span

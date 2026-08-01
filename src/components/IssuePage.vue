@@ -193,7 +193,7 @@ function evidenceLabel(kind: EvidenceKind): string {
       <ul class="mt-5 space-y-2">
         <li
           v-for="allocation in standalone.allocations"
-          :key="allocation.actor.login + ':' + allocation.reason"
+          :key="allocation.id"
           class="grid gap-2 rounded-xl bg-paper/60 p-3 sm:grid-cols-[minmax(0,1fr)_6rem]"
         >
           <div>
@@ -262,7 +262,7 @@ function evidenceLabel(kind: EvidenceKind): string {
       <ul class="mt-3 space-y-2">
         <li
           v-for="allocation in workstream.allocations"
-          :key="allocation.actor.login + ':' + allocation.kind + ':' + allocation.reason"
+          :key="allocation.id"
           class="grid gap-2 rounded-xl bg-paper/60 p-3 sm:grid-cols-[7rem_minmax(0,1fr)_6rem]"
         >
           <span class="text-xs font-semibold text-muted">

@@ -123,8 +123,10 @@ function kindClass(kind: ContributionKind): string {
         ポイントの発生源
       </h2>
       <p class="mt-2 mb-5 max-w-3xl text-sm leading-7 text-muted">
-        左端の成果から採点対象になった活動を一件ずつ経由し、右端の人物までたどれます。
-        同じ成果から他の人物へ届いた点と、誰にも配分されず図外へ流出した点も表示します。
+        左列の PR、中列の Issue、右列の人物をたどって配点元を確認できます。
+        実装とレビューは PR から人物へ直接つながるため、Issue の列を飛び越えます。
+        Issue・調査は関連 PR から Issue を経て人物へつながり、独立 Issue は中列から始まります。
+        同じ PR、Issue、人物は一つのノードにまとめ、未配分点は表示しません。
       </p>
       <SankeyDiagram
         :contributor="contributor"

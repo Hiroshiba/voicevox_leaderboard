@@ -44,14 +44,21 @@ function nodeTextFill(node: SankeyDiagramNode): string {
 }
 
 function linkColor(link: SankeyDiagramLink): string {
-  return link.selected ? "#16815d" : "#78919a";
+  switch (link.kind) {
+    case "implementation":
+      return "#16815d";
+    case "review":
+      return "#2563eb";
+    case "issue":
+      return "#d97706";
+  }
 }
 
 function linkOpacity(link: SankeyDiagramLink): number {
   if (link.selected) {
-    return 0.62;
+    return 0.7;
   }
-  return 0.3;
+  return 0.32;
 }
 
 function formatScore(score: number): string {
@@ -84,13 +91,18 @@ function formatScore(score: number): string {
       <span>発生源 {{ layout.originCount }} 件</span>
       <span>配点明細 {{ layout.allocationCount }} 件</span>
       <span class="inline-flex items-center gap-1.5">
-        <span class="h-1.5 w-7 bg-accent" />
-        選択中の人物
+        <span class="h-1.5 w-7 bg-emerald-600" />
+        実装
       </span>
       <span class="inline-flex items-center gap-1.5">
-        <span class="h-1.5 w-7 bg-slate-500" />
-        他の人物
+        <span class="h-1.5 w-7 bg-blue-600" />
+        レビュー
       </span>
+      <span class="inline-flex items-center gap-1.5">
+        <span class="h-1.5 w-7 bg-amber-600" />
+        Issue・調査
+      </span>
+      <span>選択中の人物への経路は濃く表示</span>
     </div>
 
     <div class="mt-4 max-h-[75vh] overflow-auto rounded-xl border border-line bg-white">
@@ -111,7 +123,6 @@ function formatScore(score: number): string {
             :key="link.id"
           >
             <a
-              v-if="link.href != null"
               :href="link.href"
             >
               <path
@@ -123,15 +134,6 @@ function formatScore(score: number): string {
                 <title>{{ link.label }}</title>
               </path>
             </a>
-            <path
-              v-else
-              :d="link.path"
-              :stroke="linkColor(link)"
-              :stroke-width="link.width"
-              :opacity="linkOpacity(link)"
-            >
-              <title>{{ link.label }}</title>
-            </path>
           </template>
         </g>
 
@@ -140,7 +142,6 @@ function formatScore(score: number): string {
           :key="node.id"
         >
           <a
-            v-if="node.href != null"
             :href="node.href"
           >
             <rect
@@ -164,28 +165,6 @@ function formatScore(score: number): string {
               {{ node.label }}
             </text>
           </a>
-          <g v-else>
-            <rect
-              :x="node.x"
-              :y="node.y"
-              :width="node.width"
-              :height="node.height"
-              :fill="nodeFill(node)"
-              :stroke="nodeStroke(node)"
-              rx="5"
-            >
-              <title>{{ node.description }}</title>
-            </rect>
-            <text
-              :x="node.x + 11"
-              :y="node.y + node.height / 2"
-              :fill="nodeTextFill(node)"
-              dominant-baseline="middle"
-              class="text-[12px] font-semibold"
-            >
-              {{ node.label }}
-            </text>
-          </g>
         </template>
       </svg>
     </div>

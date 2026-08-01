@@ -5,7 +5,13 @@ const dateSchema = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, "日付は YYYY-MM-DD 形式で指定してください。")
   .refine(
-    (value) => Number.isNaN(Date.parse(value + "T00:00:00Z")) === false,
+    (value) => {
+      const date = new Date(value + "T00:00:00Z");
+      return (
+        Number.isNaN(date.getTime()) === false &&
+        date.toISOString().slice(0, 10) === value
+      );
+    },
     "実在する日付を指定してください。",
   );
 
@@ -64,7 +70,19 @@ export function parseCalculationScope(input: unknown): CalculationScope {
   }
   return {
     organization: parsed.data.organization,
-    repositories: [...new Set(parsed.data.repositories)],
+    repositories: uniqueRepositories(parsed.data.repositories),
     range: parsed.data.range,
   };
+}
+
+function uniqueRepositories(repositories: string[]): string[] {
+  const seen = new Set<string>();
+  return repositories.filter((repository) => {
+    const key = repository.toLowerCase();
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }

@@ -20,10 +20,11 @@ export function extractGithubReferences(
   localOwner: string,
   localRepository: string,
 ): GithubReference[] {
+  const searchableText = maskIgnoredMarkdown(text);
   const indexed: IndexedReference[] = [];
 
-  for (const match of text.matchAll(
-    /https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/(issues|pull)\/(\d+)/gi,
+  for (const match of searchableText.matchAll(
+    /https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/(issues|pull)\/([1-9]\d*)/gi,
   )) {
     const owner = match[1];
     const repository = match[2];
@@ -44,8 +45,8 @@ export function extractGithubReferences(
     });
   }
 
-  for (const match of text.matchAll(
-    /\b([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)#(\d+)\b/g,
+  for (const match of searchableText.matchAll(
+    /\b([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)#([1-9]\d*)\b/g,
   )) {
     const owner = match[1];
     const repository = match[2];
@@ -64,7 +65,7 @@ export function extractGithubReferences(
     });
   }
 
-  for (const match of text.matchAll(/(^|[^\w/])#(\d+)\b/g)) {
+  for (const match of searchableText.matchAll(/(^|[^\w/])#([1-9]\d*)\b/g)) {
     const prefix = match[1];
     const numberText = match[2];
     assertNonNullable(prefix, "GitHub 参照の接頭辞を取得できません。");
@@ -105,14 +106,17 @@ export function extractClosingReferences(
   localOwner: string,
   localRepository: string,
 ): GithubReference[] {
+  const searchableBody = maskIgnoredMarkdown(body);
   const references: GithubReference[] = [];
-  for (const match of body.matchAll(
+  for (const match of searchableBody.matchAll(
     /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+/gi,
   )) {
     const index = requireMatchIndex(match) + match[0].length;
-    const lineEnd = body.indexOf("\n", index);
+    const lineEnd = searchableBody.indexOf("\n", index);
     const remainder =
-      lineEnd === -1 ? body.slice(index) : body.slice(index, lineEnd);
+      lineEnd === -1
+        ? searchableBody.slice(index)
+        : searchableBody.slice(index, lineEnd);
     const first = extractGithubReferences(
       remainder,
       localOwner,
@@ -131,7 +135,7 @@ export function extractRelatedIssueReferences(
   localOwner: string,
   localRepository: string,
 ): GithubReference[] {
-  const lines = body.split("\n");
+  const lines = maskIgnoredMarkdown(body).split("\n");
   const sectionLines: string[] = [];
   let inSection = false;
 
@@ -174,10 +178,22 @@ function uniqueReferences(references: GithubReference[]): GithubReference[] {
 
 function parseReferenceNumber(value: string): number {
   const number = Number(value);
-  if (Number.isInteger(number) === false || number <= 0) {
-    throw new Error("GitHub 参照の番号が正の整数ではありません。");
+  if (Number.isSafeInteger(number) === false || number <= 0) {
+    throw new Error("GitHub 参照の番号が安全な正の整数ではありません。");
   }
   return number;
+}
+
+function maskIgnoredMarkdown(text: string): string {
+  return text
+    .replace(/<!--[\s\S]*?-->/g, maskText)
+    .replace(/```[\s\S]*?```/g, maskText)
+    .replace(/~~~[\s\S]*?~~~/g, maskText)
+    .replace(/`[^`\n]*`/g, maskText);
+}
+
+function maskText(text: string): string {
+  return text.replace(/[^\n]/g, " ");
 }
 
 function requireMatchIndex(match: RegExpMatchArray): number {

@@ -63,6 +63,50 @@ describe("extractClosingReferences", () => {
       },
     ]);
   });
+
+  it("HTML コメント内のテンプレート例と番号 0 を無視する", () => {
+    expect(
+      extractClosingReferences(
+        [
+          "<!--",
+          "ref #0",
+          "close #0",
+          "-->",
+          "close #42",
+        ].join("\n"),
+        "VOICEVOX",
+        "voicevox",
+      ),
+    ).toEqual([
+      {
+        owner: "VOICEVOX",
+        repository: "voicevox",
+        number: 42,
+        hint: "unknown",
+      },
+    ]);
+  });
+});
+
+describe("無視する Markdown", () => {
+  it("コード中の番号表記を GitHub 参照にしない", () => {
+    expect(
+      extractGithubReferences(
+        ["`close #123`", "```", "fix #456", "```", "ref #789"].join(
+          "\n",
+        ),
+        "VOICEVOX",
+        "voicevox",
+      ),
+    ).toEqual([
+      {
+        owner: "VOICEVOX",
+        repository: "voicevox",
+        number: 789,
+        hint: "unknown",
+      },
+    ]);
+  });
 });
 
 describe("extractRelatedIssueReferences", () => {

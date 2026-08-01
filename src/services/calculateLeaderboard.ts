@@ -96,6 +96,7 @@ const acceptedReviewStates = new Set([
 
 const standaloneNotices = [
   "Issue の作成、Close、コメントは選択期間内のイベントだけを配点します。期間をまたぐ加点履歴は保存しません。",
+  "Issue 候補は更新日、作成日、Close 日の検索結果を統合します。期間内にコメントだけがあり、その後にも更新された Issue は GitHub Search API だけでは発見できません。",
   "独立 Issue とマージ済み PR の関連判定は、今回計算したワークストリームを対象にします。期間外の PR との関連はプロトタイプでは追跡しません。",
   "古い Issue の本文編集日時は GitHub API から特定できないため、本文の証拠要素は Issue 作成日が選択期間内の場合だけ数えます。",
   "複数 PR の Conventional Commits 補正は、PR 分割による加点を防ぐため最大値を 1 回だけ使います。",
@@ -402,7 +403,9 @@ async function calculateWorkstream(
   const nonGeneratedFiles = sum(
     pulls.map((pull) => pull.nonGeneratedFiles),
   );
-  const repositoryCount = new Set(pulls.map((pull) => pull.repository)).size;
+  const repositoryCount = new Set(
+    pulls.map((pull) => pull.repository.toLowerCase()),
+  ).size;
   const conventionalBonus = Math.max(
     ...pulls.map((pull) => pull.conventionalBonus),
   );
@@ -642,7 +645,7 @@ async function calculateStandaloneIssues(
     scope.repositories,
     3,
     async (repository) => {
-      const numbers = await client.searchUpdatedIssueNumbers(
+      const numbers = await client.searchIssueActivityNumbers(
         repository,
         scope.range,
       );
@@ -719,8 +722,7 @@ async function calculateStandaloneIssue(
 
   const statusBonus = calculateIssueStatusBonus(issue, activity, range);
   const openIssueIsEligible =
-    issue.state !== "open" ||
-    statusBonus > 0;
+    isIssueOpenAtRangeEnd(issue, range) === false || statusBonus > 0;
   if (openIssueIsEligible === false) {
     return undefined;
   }
@@ -870,7 +872,7 @@ function calculateIssueStatusBonus(
   ) {
     return 0.5;
   }
-  if (issue.state === "open") {
+  if (isIssueOpenAtRangeEnd(issue, range)) {
     const enoughParticipants = activity.participantCount >= 2;
     const participantAndEvidence =
       activity.participantCount >= 1 && activity.evidenceKinds.size >= 2;
@@ -886,6 +888,21 @@ function calculateIssueStatusBonus(
     }
   }
   return 0;
+}
+
+function isIssueOpenAtRangeEnd(
+  issue: GithubIssue,
+  range: DateRange,
+): boolean {
+  if (issue.state === "open") {
+    return true;
+  }
+  const closedAt = issue.closed_at;
+  assertNonNullable(
+    closedAt,
+    issue.html_url + " は Close 済みですが closed_at がありません。",
+  );
+  return closedAt.slice(0, 10) > range.end;
 }
 
 function allocateIssueActivity(

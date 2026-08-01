@@ -139,9 +139,10 @@ export function totalAllocations(
   ];
 
   for (const allocation of allocations) {
-    const current = grouped.get(allocation.actor.login) ?? [];
+    const key = allocation.actor.login.toLowerCase();
+    const current = grouped.get(key) ?? [];
     current.push(allocation);
-    grouped.set(allocation.actor.login, current);
+    grouped.set(key, current);
   }
   return grouped;
 }

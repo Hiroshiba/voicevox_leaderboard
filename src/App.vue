@@ -102,7 +102,11 @@ function addCustomRepository(): void {
       "リポジトリ名だけを入力してください。owner は Organization 欄を使います。";
     return;
   }
-  if (selectedRepositoryNames.value.includes(name) === false) {
+  if (
+    selectedRepositoryNames.value.some(
+      (repository) => repository.toLowerCase() === name.toLowerCase(),
+    ) === false
+  ) {
     selectedRepositoryNames.value.push(name);
   }
   customRepository.value = "";
@@ -141,6 +145,7 @@ function setMonth(offset: number): void {
 async function runCalculation(): Promise<void> {
   errorMessage.value = "";
   progress.value = undefined;
+  result.value = undefined;
   const repositoryNames = [...new Set(selectedRepositoryNames.value)];
   let scope;
   try {

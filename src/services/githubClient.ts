@@ -83,19 +83,28 @@ export class GitHubClient {
     );
   }
 
-  /** 指定期間に更新された Issue 番号を検索する。 */
-  async searchUpdatedIssueNumbers(
+  /** 指定期間に活動した可能性がある Issue 番号を検索する。 */
+  async searchIssueActivityNumbers(
     repository: string,
     range: DateRange,
   ): Promise<number[]> {
-    return this.searchIssueNumbers(
-      "repo:" +
-        repository +
-        " is:issue updated:" +
-        range.start +
-        ".." +
-        range.end,
-    );
+    const numbers = new Set<number>();
+    for (const qualifier of ["updated", "created", "closed"]) {
+      const found = await this.searchIssueNumbers(
+        "repo:" +
+          repository +
+          " is:issue " +
+          qualifier +
+          ":" +
+          range.start +
+          ".." +
+          range.end,
+      );
+      for (const number of found) {
+        numbers.add(number);
+      }
+    }
+    return [...numbers].sort((left, right) => left - right);
   }
 
   /** PR の詳細を返す。 */
@@ -408,20 +417,34 @@ function parseRepository(fullName: string): RepositoryParts {
 function shouldRetry(response: Response): boolean {
   return (
     retryableStatuses.has(response.status) ||
-    (response.status === 403 && response.headers.has("retry-after"))
+    (response.status === 403 &&
+      (response.headers.has("retry-after") ||
+        response.headers.get("x-ratelimit-remaining") === "0"))
   );
 }
 
 function retryDelayMilliseconds(headers: Headers, attempt: number): number {
   const retryAfter = headers.get("retry-after");
-  if (retryAfter == null) {
+  if (retryAfter != null) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds) === false) {
+      throw new Error("Retry-After ヘッダーが数値ではありません。");
+    }
+    return Math.min(60000, seconds * 1000);
+  }
+
+  const resetText = headers.get("x-ratelimit-reset");
+  if (resetText == null) {
     return attempt * 750;
   }
-  const seconds = Number(retryAfter);
-  if (Number.isFinite(seconds) === false) {
-    throw new Error("Retry-After ヘッダーが数値ではありません。");
+  const resetSeconds = Number(resetText);
+  if (Number.isFinite(resetSeconds) === false) {
+    throw new Error("GitHub API のリセット時刻が数値ではありません。");
   }
-  return Math.min(5000, seconds * 1000);
+  return Math.min(
+    60000,
+    Math.max(1000, resetSeconds * 1000 - Date.now() + 1000),
+  );
 }
 
 async function wait(milliseconds: number): Promise<void> {

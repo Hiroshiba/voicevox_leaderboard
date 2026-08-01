@@ -5,7 +5,9 @@ import {
   calculateImportance,
   calculatePullMass,
   calculateStandaloneIssueScore,
+  totalAllocations,
 } from "../src/domain/scoring";
+import type { ScoreAllocation } from "../src/domain/model";
 
 describe("calculateFileScore", () => {
   it("通常ファイルは 200 行を上限にする", () => {
@@ -111,3 +113,33 @@ describe("calculateStandaloneIssueScore", () => {
     expect(calculateStandaloneIssueScore(2, 10, 100, 100)).toBe(8);
   });
 });
+
+describe("totalAllocations", () => {
+  it("大文字小文字だけが異なる GitHub ログインを同一人物としてまとめる", () => {
+    const allocations: ScoreAllocation[] = [
+      allocation("Hiroshiba", 1),
+      allocation("hiroshiba", 2),
+    ];
+
+    const grouped = totalAllocations([], allocations);
+
+    expect([...grouped.keys()]).toEqual(["hiroshiba"]);
+    expect(grouped.get("hiroshiba")).toHaveLength(2);
+  });
+});
+
+function allocation(login: string, points: number): ScoreAllocation {
+  return {
+    actor: {
+      login,
+      avatarUrl: "https://github.com/" + login + ".png",
+      profileUrl: "https://github.com/" + login,
+    },
+    kind: "issue",
+    points,
+    sourceKey: "VOICEVOX/voicevox#1",
+    sourceTitle: "Issue 1",
+    sourceUrl: "https://github.com/VOICEVOX/voicevox/issues/1",
+    reason: "検証",
+  };
+}

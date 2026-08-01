@@ -38,13 +38,6 @@ export function parseAppLocation(location: string): AppLocation {
   } catch {
     return { route: { name: "notFound" } };
   }
-  if (url.hash.startsWith("#/")) {
-    try {
-      url = new URL(url.hash.slice(1), "https://leaderboard.invalid");
-    } catch (error) {
-      throw new Error("旧形式の URL を解釈できません。", { cause: error });
-    }
-  }
   const appPath = removeApplicationBasePath(url.pathname);
   if (appPath == null) {
     return { route: { name: "notFound" } };

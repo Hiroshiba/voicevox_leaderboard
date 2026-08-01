@@ -64,15 +64,4 @@ describe("画面ルート", () => {
       "/issues/voicevox/voicevox/10?start=2026-07-01&end=2026-07-31",
     );
   });
-
-  it("旧形式のハッシュ URL も解釈する", () => {
-    expect(
-      parseAppLocation(
-        "#/people/Hiroshiba?start=2026-07-01&end=2026-07-31",
-      ),
-    ).toEqual({
-      route: { name: "person", login: "Hiroshiba" },
-      range,
-    });
-  });
 });

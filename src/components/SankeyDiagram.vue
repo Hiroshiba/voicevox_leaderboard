@@ -150,7 +150,7 @@ function formatScore(score: number): string {
       <span>選択対象に関係する経路は濃く表示</span>
     </div>
 
-    <div class="mt-4 overflow-x-auto rounded-xl border border-line bg-white">
+    <div class="mt-4 overflow-x-auto overflow-y-hidden rounded-xl border border-line bg-white">
       <svg
         class="block"
         :width="layout.width"

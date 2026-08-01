@@ -20,25 +20,19 @@ const layout = computed(() =>
 );
 
 function nodeFill(node: SankeyDiagramNode): string {
-  if (node.role === "source") {
+  if (node.role === "pull") {
     return "#f4f1e8";
   }
-  if (node.unallocated) {
-    return "#fde8e3";
+  if (node.role === "issue") {
+    return "#fff5d6";
   }
   if (node.role === "actor" && node.selected) {
     return "#0d5a40";
-  }
-  if (node.selected) {
-    return "#dff3e9";
   }
   return "#e8eef1";
 }
 
 function nodeStroke(node: SankeyDiagramNode): string {
-  if (node.unallocated) {
-    return "#b33a3a";
-  }
   if (node.selected) {
     return "#16815d";
   }
@@ -50,9 +44,6 @@ function nodeTextFill(node: SankeyDiagramNode): string {
 }
 
 function linkColor(link: SankeyDiagramLink): string {
-  if (link.unallocated) {
-    return "#c35b4f";
-  }
   return link.selected ? "#16815d" : "#78919a";
 }
 
@@ -60,7 +51,7 @@ function linkOpacity(link: SankeyDiagramLink): number {
   if (link.selected) {
     return 0.62;
   }
-  return link.unallocated ? 0.5 : 0.3;
+  return 0.3;
 }
 
 function formatScore(score: number): string {
@@ -70,7 +61,7 @@ function formatScore(score: number): string {
 
 <template>
   <div class="rounded-2xl border border-line bg-surface p-3 sm:p-5">
-    <dl class="grid gap-3 sm:grid-cols-3">
+    <dl class="grid gap-3 sm:grid-cols-2">
       <div class="rounded-xl bg-accent-soft px-4 py-3">
         <dt class="text-xs font-semibold text-accent-dark">
           {{ contributor.login }} への最終配点
@@ -87,19 +78,11 @@ function formatScore(score: number): string {
           {{ formatScore(layout.otherContributorPoints) }} 点
         </dd>
       </div>
-      <div class="rounded-xl bg-red-50 px-4 py-3">
-        <dt class="text-xs font-semibold text-danger">
-          誰にも配分されず図外へ流出
-        </dt>
-        <dd class="mt-1 font-mono text-lg font-semibold text-danger">
-          {{ formatScore(layout.unallocatedPoints) }} 点
-        </dd>
-      </div>
     </dl>
 
     <div class="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-muted">
-      <span>成果 {{ layout.sourceCount }} 件</span>
-      <span>配点経路 {{ layout.activityCount }} 件</span>
+      <span>発生源 {{ layout.originCount }} 件</span>
+      <span>配点明細 {{ layout.allocationCount }} 件</span>
       <span class="inline-flex items-center gap-1.5">
         <span class="h-1.5 w-7 bg-accent" />
         選択中の人物
@@ -107,10 +90,6 @@ function formatScore(score: number): string {
       <span class="inline-flex items-center gap-1.5">
         <span class="h-1.5 w-7 bg-slate-500" />
         他の人物
-      </span>
-      <span class="inline-flex items-center gap-1.5">
-        <span class="h-1.5 w-7 bg-red-500" />
-        未配分
       </span>
     </div>
 
@@ -121,7 +100,7 @@ function formatScore(score: number): string {
         :height="layout.height"
         :viewBox="`0 0 ${layout.width} ${layout.height}`"
         role="img"
-        :aria-label="contributor.login + ' に関係する成果から個別活動と人物または図外への全配点経路を示すサンキーダイアグラム'"
+        :aria-label="contributor.login + ' に関係する PR と Issue から人物への配点経路を示すサンキーダイアグラム'"
       >
         <g
           fill="none"
@@ -171,7 +150,6 @@ function formatScore(score: number): string {
               :height="node.height"
               :fill="nodeFill(node)"
               :stroke="nodeStroke(node)"
-              :stroke-dasharray="node.unallocated ? '8 5' : undefined"
               rx="5"
             >
               <title>{{ node.description }}</title>
@@ -194,7 +172,6 @@ function formatScore(score: number): string {
               :height="node.height"
               :fill="nodeFill(node)"
               :stroke="nodeStroke(node)"
-              :stroke-dasharray="node.unallocated ? '8 5' : undefined"
               rx="5"
             >
               <title>{{ node.description }}</title>

@@ -1,19 +1,16 @@
-import { assertNonNullable } from "../domain/errors.ts";
+import { assertNonNullable, UnreachableError } from "../domain/errors.ts";
 import type {
   Actor,
+  ContributionKind,
   ContributorScore,
   LeaderboardResult,
   ScoreAllocation,
-  ScoreEntry,
   SourceReference,
+  WorkstreamScore,
 } from "../domain/model.ts";
 import { routeHref, sourceHref } from "./routes.ts";
 
-export type SankeyDiagramNodeRole =
-  | "source"
-  | "activity"
-  | "actor"
-  | "outside";
+export type SankeyDiagramNodeRole = "pull" | "issue" | "actor";
 
 export interface SankeyDiagramNode {
   id: string;
@@ -26,18 +23,20 @@ export interface SankeyDiagramNode {
   width: number;
   height: number;
   selected: boolean;
-  unallocated: boolean;
-  href?: string | undefined;
+  href: string;
 }
 
 export interface SankeyDiagramLink {
   id: string;
+  sourceId: string;
+  targetId: string;
+  kind: ContributionKind;
+  points: number;
   path: string;
   width: number;
   label: string;
   selected: boolean;
-  unallocated: boolean;
-  href?: string | undefined;
+  href: string;
 }
 
 export interface SankeyDiagramLayout {
@@ -45,233 +44,185 @@ export interface SankeyDiagramLayout {
   height: number;
   nodes: SankeyDiagramNode[];
   links: SankeyDiagramLink[];
-  sourceCount: number;
-  activityCount: number;
+  originCount: number;
+  allocationCount: number;
   selectedPoints: number;
   otherContributorPoints: number;
-  unallocatedPoints: number;
 }
 
-interface SourceFlow {
+interface ReferenceFlowNode {
   id: string;
+  role: "pull" | "issue";
   reference: SourceReference;
   title: string;
-  points: number;
-  selectedPoints: number;
-  activities: ActivityFlow[];
-}
-
-interface ActivityFlowBase {
-  id: string;
-  entry: ScoreEntry;
-  destinationId: string;
-  selected: boolean;
-}
-
-type ActivityFlow =
-  | (ActivityFlowBase & {
-      outcome: "actor";
-      actor: Actor;
-    })
-  | (ActivityFlowBase & { outcome: "outside" });
-
-interface ActorDestination {
-  id: string;
-  outcome: "actor";
-  actor: Actor;
-  points: number;
-  selected: boolean;
-}
-
-interface OutsideDestination {
-  id: string;
-  outcome: "outside";
-  entry: ScoreEntry;
-  points: number;
   selected: false;
 }
 
-type DestinationFlow = ActorDestination | OutsideDestination;
-
-interface ActivityLayout {
-  flow: ActivityFlow;
-  y: number;
-  height: number;
-  flowWidth: number;
+interface ActorFlowNode {
+  id: string;
+  role: "actor";
+  actor: Actor;
+  selected: boolean;
 }
 
-interface SourceLayout {
-  flow: SourceFlow;
-  y: number;
-  height: number;
-  flowHeight: number;
-  activities: ActivityLayout[];
+type FlowNode = ReferenceFlowNode | ActorFlowNode;
+
+interface FlowLink {
+  id: string;
+  sourceId: string;
+  targetId: string;
+  kind: ContributionKind;
+  points: number;
+  label: string;
+  selected: boolean;
+  href: string;
 }
 
-interface DestinationLayout {
-  flow: DestinationFlow;
-  y: number;
-  height: number;
-  flowHeight: number;
+interface FlowGraph {
+  nodes: FlowNode[];
+  links: FlowLink[];
+  allocationCount: number;
 }
 
-interface ColumnLayout<T> {
+interface FlowGraphBuilder {
+  nodes: Map<string, FlowNode>;
+  links: FlowLink[];
+  linkIds: Set<string>;
+  selectedAllocationIds: string[];
+  allocationCount: number;
+}
+
+interface NodeLayout {
+  flow: FlowNode;
+  points: number;
+  x: number;
+  y: number;
+  width: number;
   height: number;
-  items: T[];
+  incomingFlowHeight: number;
+  outgoingFlowHeight: number;
+}
+
+interface ColumnLayout {
+  height: number;
+  nodes: NodeLayout[];
 }
 
 const diagramWidth = 1160;
 const diagramPadding = 32;
-const sourceX = 20;
-const sourceWidth = 230;
-const activityX = 340;
-const activityWidth = 400;
-const destinationX = 860;
-const destinationWidth = 280;
-const flowScale = 10;
+const pullX = 20;
+const issueX = 450;
+const actorX = 880;
+const nodeWidth = 260;
+const flowScale = 12;
 const minimumFlowWidth = 1;
-const minimumNodeHeight = 34;
-const activityGap = 10;
-const sourceGap = 32;
+const minimumNodeHeight = 42;
+const nodeGap = 16;
 
-/** 人物に関係する全配点経路から詳細サンキーダイアグラムを作る。 */
+/** 人物に関係する配点を PR、Issue、人物の経路として配置する。 */
 export function createSankeyDiagramLayout(
   result: LeaderboardResult,
   contributor: ContributorScore,
 ): SankeyDiagramLayout {
-  const sources = collectSources(result, contributor);
-  if (sources.length === 0) {
-    throw new Error("人物に関係するポイント発生源がありません。");
+  const graph = collectFlowGraph(result, contributor);
+  if (graph.links.length === 0) {
+    throw new Error("人物に関係する配点経路がありません。");
   }
-  const sourceColumn = layoutSources(sources);
-  const destinations = collectDestinations(sources);
-  const destinationColumn = layoutDestinations(
-    destinations,
-    sourceColumn,
+  const nodeLayouts = layoutNodes(graph);
+  const selectedActorId = actorNodeId(contributor.login);
+  const selectedPoints = sum(
+    graph.links
+      .filter((link) => link.targetId === selectedActorId)
+      .map((link) => link.points),
   );
-  const contentHeight = Math.max(
-    sourceColumn.height,
-    destinationColumn.height,
+  const otherContributorPoints = sum(
+    graph.links
+      .filter(
+        (link) =>
+          link.targetId.startsWith("actor:") &&
+          link.targetId !== selectedActorId,
+      )
+      .map((link) => link.points),
   );
-  const sourceShift =
-    diagramPadding + (contentHeight - sourceColumn.height) / 2;
-  const destinationShift =
-    diagramPadding + (contentHeight - destinationColumn.height) / 2;
-  const nodes = createNodes(
-    result,
-    sourceColumn.items,
-    sourceShift,
-    destinationColumn.items,
-    destinationShift,
-  );
-  const links = createLinks(
-    result,
-    sourceColumn.items,
-    sourceShift,
-    destinationColumn.items,
-    destinationShift,
-  );
-  const unallocatedPoints = sum(
-    sources.flatMap((source) =>
-      source.activities
-        .filter((activity) => activity.outcome === "outside")
-        .map((activity) => activity.entry.points),
-    ),
-  );
-  const sourcePoints = sum(sources.map((source) => source.points));
-  const otherContributorPoints =
-    sourcePoints - contributor.score - unallocatedPoints;
   assertNearlyEqual(
     contributor.score,
-    sum(
-      sources.flatMap((source) =>
-        source.activities
-          .filter((activity) => activity.selected)
-          .map((activity) => activity.entry.points),
-      ),
-    ),
-    "人物の合計点と図内の選択人物への流入点が一致しません。",
+    selectedPoints,
+    "人物の合計点と図内の人物への流入点が一致しません。",
   );
-  if (otherContributorPoints < -scoreTolerance(sourcePoints)) {
-    throw new Error("他の人物へ配分された点が負の値になりました。");
-  }
+  const targetIds = new Set(graph.links.map((link) => link.targetId));
 
   return {
     width: diagramWidth,
-    height: contentHeight + diagramPadding * 2,
-    nodes,
-    links,
-    sourceCount: sources.length,
-    activityCount: sum(sources.map((source) => source.activities.length)),
-    selectedPoints: contributor.score,
-    otherContributorPoints: Math.max(0, otherContributorPoints),
-    unallocatedPoints,
+    height:
+      Math.max(...nodeLayouts.map((layout) => layout.y + layout.height)) +
+      diagramPadding,
+    nodes: createDiagramNodes(result, nodeLayouts),
+    links: createDiagramLinks(graph.links, nodeLayouts),
+    originCount: graph.nodes.filter((node) => targetIds.has(node.id) === false)
+      .length,
+    allocationCount: graph.allocationCount,
+    selectedPoints,
+    otherContributorPoints,
   };
 }
 
-function collectSources(
+function collectFlowGraph(
   result: LeaderboardResult,
   contributor: ContributorScore,
-): SourceFlow[] {
-  const login = contributor.login.toLowerCase();
-  const sources: SourceFlow[] = [];
+): FlowGraph {
+  const selectedLogin = contributor.login.toLowerCase();
+  const builder: FlowGraphBuilder = {
+    nodes: new Map<string, FlowNode>(),
+    links: [],
+    linkIds: new Set<string>(),
+    selectedAllocationIds: [],
+    allocationCount: 0,
+  };
+
   for (const workstream of result.workstreams) {
-    if (
-      workstream.allocations.some(
-        (allocation) => allocation.actor.login.toLowerCase() === login,
-      ) === false
-    ) {
+    if (hasAllocationFor(workstream.allocations, selectedLogin) === false) {
       continue;
     }
-    const id = "workstream:" + workstream.key;
-    const activities = [
-      ...workstream.allocations.map((allocation) =>
-        createAllocatedActivity(id, allocation, login),
-      ),
-      ...workstream.unallocatedEntries.map((entry) =>
-        createOutsideActivity(id, entry),
-      ),
-    ].sort(compareActivities);
-    assertSourceConservation(workstream.importance, activities, id);
-    sources.push({
-      id,
-      reference: workstream.source,
-      title: workstream.title,
-      points: workstream.importance,
-      selectedPoints: selectedActivityPoints(activities),
-      activities,
-    });
+    collectWorkstreamFlows(builder, workstream, result, selectedLogin);
   }
-
   for (const standalone of result.standaloneIssues) {
-    if (
-      standalone.allocations.some(
-        (allocation) => allocation.actor.login.toLowerCase() === login,
-      ) === false
-    ) {
+    if (hasAllocationFor(standalone.allocations, selectedLogin) === false) {
       continue;
     }
-    const id = "standalone:" + standalone.key;
-    const activities = standalone.allocations
-      .map((allocation) => createAllocatedActivity(id, allocation, login))
-      .sort(compareActivities);
-    assertSourceConservation(standalone.score, activities, id);
-    sources.push({
-      id,
-      reference: { type: "issue", key: standalone.key },
-      title: standalone.title,
-      points: standalone.score,
-      selectedPoints: selectedActivityPoints(activities),
-      activities,
-    });
+    assertNearlyEqual(
+      standalone.score,
+      sum(standalone.allocations.map((allocation) => allocation.points)),
+      standalone.key + " の総量と配点の合計が一致しません。",
+    );
+    const issueReference: SourceReference = {
+      type: "issue",
+      key: standalone.key,
+    };
+    const issueId = addReferenceNode(
+      builder,
+      issueReference,
+      standalone.title,
+    );
+    for (const allocation of standalone.allocations) {
+      assertAllocationSource(
+        allocation,
+        "issue",
+        standalone.key,
+        standalone.key,
+      );
+      addAllocationLink(
+        builder,
+        issueId,
+        allocation,
+        "standalone:" + standalone.key,
+        result,
+        selectedLogin,
+      );
+    }
   }
 
-  const selectedIds = sources
-    .flatMap((source) => source.activities)
-    .filter((activity) => activity.selected)
-    .map((activity) => activity.entry.id)
-    .sort();
-  const contributorIds = contributor.entries.map((entry) => entry.id).sort();
+  const selectedIds = builder.selectedAllocationIds.toSorted();
+  const contributorIds = contributor.entries.map((entry) => entry.id).toSorted();
   if (
     selectedIds.length !== contributorIds.length ||
     selectedIds.some((id, index) => id !== contributorIds[index])
@@ -279,389 +230,566 @@ function collectSources(
     throw new Error("人物の配点明細とサンキーダイアグラムの経路が一致しません。");
   }
 
-  return sources.sort(
-    (left, right) =>
-      right.selectedPoints - left.selectedPoints ||
-      left.id.localeCompare(right.id),
-  );
-}
-
-function createAllocatedActivity(
-  sourceId: string,
-  allocation: ScoreAllocation,
-  selectedLogin: string,
-): ActivityFlow {
-  const login = allocation.actor.login.toLowerCase();
-  const id = sourceId + ":activity:" + allocation.id;
   return {
-    id,
-    outcome: "actor",
-    entry: allocation,
-    actor: allocation.actor,
-    destinationId: "destination:" + id,
-    selected: login === selectedLogin,
+    nodes: [...builder.nodes.values()],
+    links: builder.links,
+    allocationCount: builder.allocationCount,
   };
 }
 
-function createOutsideActivity(
-  sourceId: string,
-  entry: ScoreEntry,
-): ActivityFlow {
-  const id = sourceId + ":activity:" + entry.id;
-  return {
-    id,
-    outcome: "outside",
-    entry,
-    destinationId: "destination:" + id,
-    selected: false,
-  };
-}
-
-function compareActivities(left: ActivityFlow, right: ActivityFlow): number {
-  return (
-    activityOrder(left) - activityOrder(right) ||
-    right.entry.points - left.entry.points ||
-    left.id.localeCompare(right.id)
-  );
-}
-
-function activityOrder(activity: ActivityFlow): number {
-  if (activity.selected) {
-    return 0;
-  }
-  return activity.outcome === "actor" ? 1 : 2;
-}
-
-function selectedActivityPoints(activities: ActivityFlow[]): number {
-  return sum(
-    activities
-      .filter((activity) => activity.selected)
-      .map((activity) => activity.entry.points),
-  );
-}
-
-function collectDestinations(
-  sources: SourceFlow[],
-): DestinationFlow[] {
-  return sources.flatMap((source) =>
-    source.activities.map((activity): DestinationFlow => {
-      if (activity.outcome === "outside") {
-        return {
-          id: activity.destinationId,
-          outcome: "outside",
-          entry: activity.entry,
-          points: activity.entry.points,
-          selected: false,
-        };
-      }
-      return {
-        id: activity.destinationId,
-        outcome: "actor",
-        actor: activity.actor,
-        points: activity.entry.points,
-        selected: activity.selected,
-      };
-    }),
-  );
-}
-
-function layoutSources(sources: SourceFlow[]): ColumnLayout<SourceLayout> {
-  const layouts: SourceLayout[] = [];
-  let nextY = 0;
-  for (const source of sources) {
-    const activityLayouts = source.activities.map((activity) => {
-      const width = scoreWidth(activity.entry.points);
-      return {
-        flow: activity,
-        y: 0,
-        height: Math.max(minimumNodeHeight, width),
-        flowWidth: width,
-      };
-    });
-    const activityHeight =
-      sum(activityLayouts.map((layout) => layout.height)) +
-      activityGap * Math.max(0, activityLayouts.length - 1);
-    const flowHeight = sum(
-      activityLayouts.map((layout) => layout.flowWidth),
-    );
-    const sourceHeight = Math.max(minimumNodeHeight, flowHeight);
-    const groupHeight = Math.max(sourceHeight, activityHeight);
-    let activityY = nextY + (groupHeight - activityHeight) / 2;
-    for (const activity of activityLayouts) {
-      activity.y = activityY;
-      activityY += activity.height + activityGap;
-    }
-    layouts.push({
-      flow: source,
-      y: nextY + (groupHeight - sourceHeight) / 2,
-      height: sourceHeight,
-      flowHeight,
-      activities: activityLayouts,
-    });
-    nextY += groupHeight + sourceGap;
-  }
-  return {
-    height: nextY - sourceGap,
-    items: layouts,
-  };
-}
-
-function layoutDestinations(
-  destinations: DestinationFlow[],
-  sourceColumn: ColumnLayout<SourceLayout>,
-): ColumnLayout<DestinationLayout> {
-  const destinationsById = new Map(
-    destinations.map((destination) => [destination.id, destination]),
-  );
-  const layouts = sourceColumn.items.flatMap((source) =>
-    source.activities.map((activity): DestinationLayout => {
-      const destination = destinationsById.get(
-        activity.flow.destinationId,
-      );
-      assertNonNullable(
-        destination,
-        activity.flow.destinationId + " の終点がありません。",
-      );
-      return {
-        flow: destination,
-        y: activity.y,
-        height: activity.height,
-        flowHeight: activity.flowWidth,
-      };
-    }),
-  );
-  if (layouts.length !== destinations.length) {
-    throw new Error("サンキー経路と終点の件数が一致しません。");
-  }
-  return {
-    height: sourceColumn.height,
-    items: layouts,
-  };
-}
-
-function createNodes(
+function collectWorkstreamFlows(
+  builder: FlowGraphBuilder,
+  workstream: WorkstreamScore,
   result: LeaderboardResult,
-  sources: SourceLayout[],
-  sourceShift: number,
-  destinations: DestinationLayout[],
-  destinationShift: number,
-): SankeyDiagramNode[] {
-  const nodes: SankeyDiagramNode[] = [];
-  for (const source of sources) {
-    nodes.push({
-      id: source.flow.id,
-      role: "source",
-      label:
-        compactReferenceLabel(source.flow.reference) +
-        " " +
-        truncate(source.flow.title, 9),
-      description:
-        source.flow.title + "、総量 " + formatScore(source.flow.points) + " 点",
-      points: source.flow.points,
-      x: sourceX,
-      y: source.y + sourceShift,
-      width: sourceWidth,
-      height: source.height,
-      selected: false,
-      unallocated: false,
-      href: sourceHref(source.flow.reference, result.range),
-    });
-    for (const activity of source.activities) {
-      nodes.push({
-        id: activity.flow.id,
-        role: "activity",
-        label: truncate(activity.flow.entry.reason, 30),
-        description:
-          activity.flow.entry.sourceTitle +
-          "。" +
-          activity.flow.entry.reason +
-          "。" +
-          formatScore(activity.flow.entry.points) +
-          " 点",
-        points: activity.flow.entry.points,
-        x: activityX,
-        y: activity.y + sourceShift,
-        width: activityWidth,
-        height: activity.height,
-        selected: activity.flow.selected,
-        unallocated: activity.flow.outcome === "outside",
-        href: sourceHref(activity.flow.entry.source, result.range),
-      });
-    }
+  selectedLogin: string,
+): void {
+  assertWorkstreamConservation(workstream);
+  const pullByKey = new Map(
+    workstream.pulls.map((pull) => [pull.key.toLowerCase(), pull]),
+  );
+  if (pullByKey.size !== workstream.pulls.length) {
+    throw new Error(workstream.key + " に同じ PR が複数含まれています。");
   }
+  const issueAllocations: ScoreAllocation[] = [];
 
-  for (const destination of destinations) {
-    if (destination.flow.outcome === "actor") {
-      nodes.push({
-        id: destination.flow.id,
-        role: "actor",
-        label:
-          destination.flow.actor.login +
-          " " +
-          formatScore(destination.flow.points) +
-          " 点",
-        description:
-          destination.flow.actor.login +
-          " へこの図から " +
-          formatScore(destination.flow.points) +
-          " 点",
-        points: destination.flow.points,
-        x: destinationX,
-        y: destination.y + destinationShift,
-        width: destinationWidth,
-        height: destination.height,
-        selected: destination.flow.selected,
-        unallocated: false,
-        href: routeHref(
-          { name: "person", login: destination.flow.actor.login },
-          result.range,
-        ),
-      });
+  for (const allocation of workstream.allocations) {
+    if (allocation.kind === "issue") {
+      const issue = workstream.issue;
+      assertNonNullable(
+        issue,
+        workstream.key + " の Issue 配点に関連 Issue がありません。",
+      );
+      assertAllocationSource(
+        allocation,
+        "issue",
+        issue.key,
+        workstream.key,
+      );
+      const issueId = addReferenceNode(
+        builder,
+        allocation.source,
+        issue.title,
+      );
+      addAllocationLink(
+        builder,
+        issueId,
+        allocation,
+        "workstream:" + workstream.key,
+        result,
+        selectedLogin,
+      );
+      issueAllocations.push(allocation);
       continue;
     }
-    nodes.push({
-      id: destination.flow.id,
-      role: "outside",
-      label: "図外へ流出 → " + formatScore(destination.flow.points) + " 点",
-      description:
-        destination.flow.entry.reason +
-        "。" +
-        formatScore(destination.flow.points) +
-        " 点は誰にも配分されません。",
-      points: destination.flow.points,
-      x: destinationX,
-      y: destination.y + destinationShift,
-      width: destinationWidth,
-      height: destination.height,
-      selected: false,
-      unallocated: true,
-    });
-  }
-  return nodes;
-}
 
-function createLinks(
-  result: LeaderboardResult,
-  sources: SourceLayout[],
-  sourceShift: number,
-  destinations: DestinationLayout[],
-  destinationShift: number,
-): SankeyDiagramLink[] {
-  const links: SankeyDiagramLink[] = [];
-  const destinationsById = new Map(
-    destinations.map((destination) => [destination.flow.id, destination]),
-  );
-  const destinationOffsets = new Map(
-    destinations.map((destination) => [
-      destination.flow.id,
-      (destination.height - destination.flowHeight) / 2,
-    ]),
-  );
-  for (const source of sources) {
-    let sourceOffset = (source.height - source.flowHeight) / 2;
-    for (const activity of source.activities) {
-      const activityCenter =
-        activity.y + sourceShift + activity.height / 2;
-      const sourceCenter =
-        source.y + sourceShift + sourceOffset + activity.flowWidth / 2;
-      const unallocated = activity.flow.outcome === "outside";
-      const activityHref = sourceHref(activity.flow.entry.source, result.range);
-      links.push({
-        id: source.flow.id + ":to:" + activity.flow.id,
-        path: createPath(
-          sourceX + sourceWidth,
-          sourceCenter,
-          activityX,
-          activityCenter,
-        ),
-        width: activity.flowWidth,
-        label:
-          source.flow.title +
-          " から " +
-          activity.flow.entry.reason +
-          " へ " +
-          formatScore(activity.flow.entry.points) +
-          " 点",
-        selected: activity.flow.selected,
-        unallocated,
-        href: activityHref,
-      });
-      sourceOffset += activity.flowWidth;
-
-      const destination = destinationsById.get(
-        activity.flow.destinationId,
-      );
-      const destinationOffset = destinationOffsets.get(
-        activity.flow.destinationId,
-      );
-      assertNonNullable(
-        destination,
-        activity.flow.destinationId + " の終点ノードがありません。",
-      );
-      assertNonNullable(
-        destinationOffset,
-        activity.flow.destinationId + " の終点位置がありません。",
-      );
-      const destinationCenter =
-        destination.y +
-        destinationShift +
-        destinationOffset +
-        activity.flowWidth / 2;
-      links.push({
-        id: activity.flow.id + ":to:" + activity.flow.destinationId,
-        path: createPath(
-          activityX + activityWidth,
-          activityCenter,
-          destinationX,
-          destinationCenter,
-        ),
-        width: activity.flowWidth,
-        label: createDestinationLinkLabel(activity),
-        selected: activity.flow.selected,
-        unallocated,
-        ...(activity.flow.outcome === "actor"
-          ? {
-              href: routeHref(
-                { name: "person", login: activity.flow.actor.login },
-                result.range,
-              ),
-            }
-          : {}),
-      });
-      destinationOffsets.set(
-        activity.flow.destinationId,
-        destinationOffset + activity.flowWidth,
+    if (allocation.source.type !== "pull") {
+      throw new Error(
+        workstream.key + " の実装・レビュー配点元が PR ではありません。",
       );
     }
+    const pull = pullByKey.get(allocation.source.key.toLowerCase());
+    assertNonNullable(
+      pull,
+      workstream.key + " の配点元 PR " + allocation.source.key + " がありません。",
+    );
+    const pullId = addReferenceNode(builder, allocation.source, pull.title);
+    addAllocationLink(
+      builder,
+      pullId,
+      allocation,
+      "workstream:" + workstream.key,
+      result,
+      selectedLogin,
+    );
   }
-  return links;
-}
 
-function createDestinationLinkLabel(activity: ActivityLayout): string {
-  const points = formatScore(activity.flow.entry.points);
-  if (activity.flow.outcome === "outside") {
-    return activity.flow.entry.reason + "により " + points + " 点が図外へ流出";
+  if (issueAllocations.length === 0) {
+    return;
   }
-  return (
-    activity.flow.entry.reason +
-    "から " +
-    activity.flow.actor.login +
-    " へ " +
-    points +
-    " 点"
+  const issue = workstream.issue;
+  assertNonNullable(
+    issue,
+    workstream.key + " の Issue 配点に関連 Issue がありません。",
   );
+  const issueReference: SourceReference = { type: "issue", key: issue.key };
+  const issueId = addReferenceNode(builder, issueReference, issue.title);
+  const totalMass = sum(workstream.pulls.map((pull) => pull.mass));
+  if (totalMass <= 0) {
+    throw new Error(workstream.key + " の PR 質量が正の値ではありません。");
+  }
+  for (const pull of workstream.pulls) {
+    if (pull.mass <= 0) {
+      throw new Error(pull.key + " の PR 質量が正の値ではありません。");
+    }
+    const pullReference: SourceReference = { type: "pull", key: pull.key };
+    const pullId = addReferenceNode(builder, pullReference, pull.title);
+    for (const allocation of issueAllocations) {
+      const points = allocation.points * (pull.mass / totalMass);
+      const selected =
+        allocation.actor.login.toLowerCase() === selectedLogin;
+      addFlowLink(builder, {
+        id:
+          "issue-input:" +
+          workstream.key +
+          ":" +
+          pull.key +
+          ":" +
+          allocation.id,
+        sourceId: pullId,
+        targetId: issueId,
+        kind: "issue",
+        points,
+        label:
+          compactReferenceLabel(pullReference) +
+          " から " +
+          compactReferenceLabel(issueReference) +
+          " の Issue 配点へ " +
+          formatScore(points) +
+          " 点。" +
+          allocation.reason,
+        selected,
+        href: sourceHref(issueReference, result.range),
+      });
+    }
+  }
 }
 
-function assertSourceConservation(
-  expectedPoints: number,
-  activities: ActivityFlow[],
+function addAllocationLink(
+  builder: FlowGraphBuilder,
   sourceId: string,
+  allocation: ScoreAllocation,
+  scopeId: string,
+  result: LeaderboardResult,
+  selectedLogin: string,
 ): void {
-  assertNearlyEqual(
-    expectedPoints,
-    sum(activities.map((activity) => activity.entry.points)),
-    sourceId + " の総量と詳細経路の合計が一致しません。",
+  const selected = allocation.actor.login.toLowerCase() === selectedLogin;
+  const actorId = addActorNode(builder, allocation.actor, selected);
+  addFlowLink(builder, {
+    id: "allocation:" + scopeId + ":" + allocation.id,
+    sourceId,
+    targetId: actorId,
+    kind: allocation.kind,
+    points: allocation.points,
+    label:
+      allocation.sourceTitle +
+      " から " +
+      allocation.actor.login +
+      " へ " +
+      formatScore(allocation.points) +
+      " 点。" +
+      allocation.reason,
+    selected,
+    href: sourceHref(allocation.source, result.range),
+  });
+  builder.allocationCount += 1;
+  if (selected) {
+    builder.selectedAllocationIds.push(allocation.id);
+  }
+}
+
+function addFlowLink(builder: FlowGraphBuilder, link: FlowLink): void {
+  if (link.points <= 0) {
+    throw new Error(link.id + " の配点が正の値ではありません。");
+  }
+  if (builder.linkIds.has(link.id)) {
+    throw new Error(link.id + " の配点経路が重複しています。");
+  }
+  builder.linkIds.add(link.id);
+  builder.links.push(link);
+}
+
+function addReferenceNode(
+  builder: FlowGraphBuilder,
+  reference: SourceReference,
+  title: string,
+): string {
+  const id = referenceNodeId(reference);
+  const current = builder.nodes.get(id);
+  if (current != null) {
+    if (current.role !== reference.type) {
+      throw new Error(id + " のノード種別が一致しません。");
+    }
+    return id;
+  }
+  builder.nodes.set(id, {
+    id,
+    role: reference.type,
+    reference,
+    title,
+    selected: false,
+  });
+  return id;
+}
+
+function addActorNode(
+  builder: FlowGraphBuilder,
+  actor: Actor,
+  selected: boolean,
+): string {
+  const id = actorNodeId(actor.login);
+  const current = builder.nodes.get(id);
+  if (current != null) {
+    if (current.role !== "actor") {
+      throw new Error(id + " のノード種別が人物ではありません。");
+    }
+    if (current.selected !== selected) {
+      throw new Error(id + " の選択状態が一致しません。");
+    }
+    return id;
+  }
+  builder.nodes.set(id, {
+    id,
+    role: "actor",
+    actor,
+    selected,
+  });
+  return id;
+}
+
+function layoutNodes(graph: FlowGraph): NodeLayout[] {
+  const incomingWidths = sumLinkWidths(graph.links, "incoming");
+  const outgoingWidths = sumLinkWidths(graph.links, "outgoing");
+  const incomingPoints = sumLinkPoints(graph.links, "incoming");
+  const outgoingPoints = sumLinkPoints(graph.links, "outgoing");
+  const selectedPoints = sumSelectedLinkPoints(graph.links);
+  const layouts = graph.nodes.map((flow): NodeLayout => {
+    const incomingFlowHeight = incomingWidths.get(flow.id) ?? 0;
+    const outgoingFlowHeight = outgoingWidths.get(flow.id) ?? 0;
+    const incoming = incomingPoints.get(flow.id) ?? 0;
+    const outgoing = outgoingPoints.get(flow.id) ?? 0;
+    if (incoming > 0 && outgoing > 0) {
+      assertNearlyEqual(
+        incoming,
+        outgoing,
+        flow.id + " の流入点と流出点が一致しません。",
+      );
+    }
+    return {
+      flow,
+      points: Math.max(incoming, outgoing),
+      x: nodeX(flow.role),
+      y: 0,
+      width: nodeWidth,
+      height: Math.max(
+        minimumNodeHeight,
+        incomingFlowHeight,
+        outgoingFlowHeight,
+      ),
+      incomingFlowHeight,
+      outgoingFlowHeight,
+    };
+  });
+  const columns = [
+    layoutColumn(layouts, "pull", selectedPoints),
+    layoutColumn(layouts, "issue", selectedPoints),
+    layoutColumn(layouts, "actor", selectedPoints),
+  ];
+  const contentHeight = Math.max(...columns.map((column) => column.height));
+  for (const column of columns) {
+    const shift = diagramPadding + (contentHeight - column.height) / 2;
+    for (const layout of column.nodes) {
+      layout.y += shift;
+    }
+  }
+  return layouts;
+}
+
+function layoutColumn(
+  layouts: NodeLayout[],
+  role: SankeyDiagramNodeRole,
+  selectedPoints: Map<string, number>,
+): ColumnLayout {
+  const nodes = layouts
+    .filter((layout) => layout.flow.role === role)
+    .sort(
+      (left, right) =>
+        (selectedPoints.get(right.flow.id) ?? 0) -
+          (selectedPoints.get(left.flow.id) ?? 0) ||
+        right.points - left.points ||
+        left.flow.id.localeCompare(right.flow.id),
+    );
+  let nextY = 0;
+  for (const node of nodes) {
+    node.y = nextY;
+    nextY += node.height + nodeGap;
+  }
+  return {
+    height: Math.max(0, nextY - nodeGap),
+    nodes,
+  };
+}
+
+function createDiagramNodes(
+  result: LeaderboardResult,
+  layouts: NodeLayout[],
+): SankeyDiagramNode[] {
+  return layouts.map((layout): SankeyDiagramNode => {
+    if (layout.flow.role === "actor") {
+      return {
+        id: layout.flow.id,
+        role: layout.flow.role,
+        label:
+          layout.flow.actor.login + " " + formatScore(layout.points) + " 点",
+        description:
+          layout.flow.actor.login +
+          " へ図示された経路から " +
+          formatScore(layout.points) +
+          " 点",
+        points: layout.points,
+        x: layout.x,
+        y: layout.y,
+        width: layout.width,
+        height: layout.height,
+        selected: layout.flow.selected,
+        href: routeHref(
+          { name: "person", login: layout.flow.actor.login },
+          result.range,
+        ),
+      };
+    }
+    const roleLabel = layout.flow.role === "pull" ? "PR" : "Issue";
+    return {
+      id: layout.flow.id,
+      role: layout.flow.role,
+      label:
+        compactReferenceLabel(layout.flow.reference) +
+        " " +
+        truncate(layout.flow.title, 16),
+      description:
+        roleLabel +
+        "「" +
+        layout.flow.title +
+        "」から図示された配点 " +
+        formatScore(layout.points) +
+        " 点",
+      points: layout.points,
+      x: layout.x,
+      y: layout.y,
+      width: layout.width,
+      height: layout.height,
+      selected: false,
+      href: sourceHref(layout.flow.reference, result.range),
+    };
+  });
+}
+
+function createDiagramLinks(
+  flows: FlowLink[],
+  nodeLayouts: NodeLayout[],
+): SankeyDiagramLink[] {
+  const nodeById = new Map(
+    nodeLayouts.map((layout) => [layout.flow.id, layout]),
   );
+  const outgoingByNode = groupLinks(flows, "outgoing");
+  const incomingByNode = groupLinks(flows, "incoming");
+  const sourceYByLink = new Map<string, number>();
+  const targetYByLink = new Map<string, number>();
+
+  for (const node of nodeLayouts) {
+    const outgoing = outgoingByNode.get(node.flow.id) ?? [];
+    outgoing.sort((left, right) =>
+      compareLinkedNodes(left.targetId, right.targetId, nodeById, left, right),
+    );
+    let offset = (node.height - node.outgoingFlowHeight) / 2;
+    for (const flow of outgoing) {
+      const width = scoreWidth(flow.points);
+      sourceYByLink.set(flow.id, node.y + offset + width / 2);
+      offset += width;
+    }
+
+    const incoming = incomingByNode.get(node.flow.id) ?? [];
+    incoming.sort((left, right) =>
+      compareLinkedNodes(left.sourceId, right.sourceId, nodeById, left, right),
+    );
+    offset = (node.height - node.incomingFlowHeight) / 2;
+    for (const flow of incoming) {
+      const width = scoreWidth(flow.points);
+      targetYByLink.set(flow.id, node.y + offset + width / 2);
+      offset += width;
+    }
+  }
+
+  return flows
+    .map((flow): SankeyDiagramLink => {
+      const source = nodeById.get(flow.sourceId);
+      const target = nodeById.get(flow.targetId);
+      const sourceY = sourceYByLink.get(flow.id);
+      const targetY = targetYByLink.get(flow.id);
+      assertNonNullable(source, flow.sourceId + " の始点ノードがありません。");
+      assertNonNullable(target, flow.targetId + " の終点ノードがありません。");
+      assertNonNullable(sourceY, flow.id + " の始点位置がありません。");
+      assertNonNullable(targetY, flow.id + " の終点位置がありません。");
+      return {
+        ...flow,
+        path: createPath(
+          source.x + source.width,
+          sourceY,
+          target.x,
+          targetY,
+        ),
+        width: scoreWidth(flow.points),
+      };
+    })
+    .sort(
+      (left, right) =>
+        Number(left.selected) - Number(right.selected) ||
+        contributionKindOrder(left.kind) - contributionKindOrder(right.kind) ||
+        left.id.localeCompare(right.id),
+    );
+}
+
+function compareLinkedNodes(
+  leftNodeId: string,
+  rightNodeId: string,
+  nodeById: Map<string, NodeLayout>,
+  leftLink: FlowLink,
+  rightLink: FlowLink,
+): number {
+  const leftNode = nodeById.get(leftNodeId);
+  const rightNode = nodeById.get(rightNodeId);
+  assertNonNullable(leftNode, leftNodeId + " の接続先ノードがありません。");
+  assertNonNullable(rightNode, rightNodeId + " の接続先ノードがありません。");
+  return (
+    leftNode.y - rightNode.y ||
+    contributionKindOrder(leftLink.kind) -
+      contributionKindOrder(rightLink.kind) ||
+    leftLink.id.localeCompare(rightLink.id)
+  );
+}
+
+function groupLinks(
+  links: FlowLink[],
+  direction: "incoming" | "outgoing",
+): Map<string, FlowLink[]> {
+  const grouped = new Map<string, FlowLink[]>();
+  for (const link of links) {
+    const nodeId = direction === "incoming" ? link.targetId : link.sourceId;
+    const current = grouped.get(nodeId);
+    if (current == null) {
+      grouped.set(nodeId, [link]);
+      continue;
+    }
+    current.push(link);
+  }
+  return grouped;
+}
+
+function sumLinkWidths(
+  links: FlowLink[],
+  direction: "incoming" | "outgoing",
+): Map<string, number> {
+  return sumLinks(
+    links,
+    direction,
+    (link) => scoreWidth(link.points),
+  );
+}
+
+function sumLinkPoints(
+  links: FlowLink[],
+  direction: "incoming" | "outgoing",
+): Map<string, number> {
+  return sumLinks(links, direction, (link) => link.points);
+}
+
+function sumSelectedLinkPoints(links: FlowLink[]): Map<string, number> {
+  const selected = links.filter((link) => link.selected);
+  const incoming = sumLinkPoints(selected, "incoming");
+  const outgoing = sumLinkPoints(selected, "outgoing");
+  const totals = new Map(incoming);
+  for (const [nodeId, points] of outgoing) {
+    totals.set(nodeId, Math.max(points, totals.get(nodeId) ?? 0));
+  }
+  return totals;
+}
+
+function sumLinks(
+  links: FlowLink[],
+  direction: "incoming" | "outgoing",
+  value: (link: FlowLink) => number,
+): Map<string, number> {
+  const totals = new Map<string, number>();
+  for (const link of links) {
+    const nodeId = direction === "incoming" ? link.targetId : link.sourceId;
+    totals.set(nodeId, (totals.get(nodeId) ?? 0) + value(link));
+  }
+  return totals;
+}
+
+function assertWorkstreamConservation(workstream: WorkstreamScore): void {
+  const allocatedPoints = sum(
+    workstream.allocations.map((allocation) => allocation.points),
+  );
+  const unallocatedPoints = sum(
+    workstream.unallocatedEntries.map((entry) => entry.points),
+  );
+  assertNearlyEqual(
+    workstream.unallocatedPoints,
+    unallocatedPoints,
+    workstream.key + " の未配分点と明細の合計が一致しません。",
+  );
+  assertNearlyEqual(
+    workstream.importance,
+    allocatedPoints + unallocatedPoints,
+    workstream.key + " の総量と詳細経路の合計が一致しません。",
+  );
+}
+
+function assertAllocationSource(
+  allocation: ScoreAllocation,
+  expectedType: SourceReference["type"],
+  expectedKey: string,
+  scopeKey: string,
+): void {
+  if (
+    allocation.source.type !== expectedType ||
+    allocation.source.key.toLowerCase() !== expectedKey.toLowerCase()
+  ) {
+    throw new Error(scopeKey + " の配点元が対象と一致しません。");
+  }
+}
+
+function hasAllocationFor(
+  allocations: ScoreAllocation[],
+  login: string,
+): boolean {
+  return allocations.some(
+    (allocation) => allocation.actor.login.toLowerCase() === login,
+  );
+}
+
+function referenceNodeId(reference: SourceReference): string {
+  return reference.type + ":" + reference.key.toLowerCase();
+}
+
+function actorNodeId(login: string): string {
+  return "actor:" + login.toLowerCase();
+}
+
+function nodeX(role: SankeyDiagramNodeRole): number {
+  switch (role) {
+    case "pull":
+      return pullX;
+    case "issue":
+      return issueX;
+    case "actor":
+      return actorX;
+    default:
+      throw new UnreachableError(role);
+  }
+}
+
+function contributionKindOrder(kind: ContributionKind): number {
+  switch (kind) {
+    case "implementation":
+      return 0;
+    case "review":
+      return 1;
+    case "issue":
+      return 2;
+    default:
+      throw new UnreachableError(kind);
+  }
 }
 
 function assertNearlyEqual(

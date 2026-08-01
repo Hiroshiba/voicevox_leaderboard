@@ -1,209 +1,317 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, shallowRef } from "vue";
+import IssuePage from "./components/IssuePage.vue";
 import LeaderboardTable from "./components/LeaderboardTable.vue";
 import MethodologyPanel from "./components/MethodologyPanel.vue";
+import PersonPage from "./components/PersonPage.vue";
+import PullPage from "./components/PullPage.vue";
 import WorkstreamList from "./components/WorkstreamList.vue";
+import { parseLeaderboardDataset } from "./domain/dataset.ts";
 import type {
-  CalculationProgress,
+  DateRange,
+  LeaderboardDataset,
   LeaderboardResult,
-  RepositoryOption,
-} from "./domain/model";
+} from "./domain/model.ts";
+import { calculateLeaderboard } from "./services/calculateLeaderboard.ts";
+import { parseDateRange } from "./services/calculationScope.ts";
 import {
-  calculateLeaderboard,
-  fetchRepositoryOptions,
-} from "./services/calculateLeaderboard";
-import { parseCalculationScope } from "./services/calculationScope";
+  parseAppLocation,
+  routeHref,
+  type AppLocation,
+} from "./services/routes.ts";
 
-const recommendedRepositories = [
-  "voicevox",
-  "voicevox_engine",
-  "voicevox_core",
-  "voicevox_project",
-  "voicevox_blog",
-  "onnxruntime-builder",
-  "voicevox_additional_libraries",
-];
+interface LoadingState {
+  status: "loading";
+}
 
-const initialRange = monthRange(-1);
-const environmentToken = import.meta.env.VITE_GITHUB_TOKEN;
-const organization = ref("VOICEVOX");
-const startDate = ref(initialRange.start);
-const endDate = ref(initialRange.end);
-const token = ref(environmentToken ?? "");
-const selectedRepositoryNames = ref<string[]>([...recommendedRepositories]);
-const repositoryOptions = ref<RepositoryOption[]>([]);
-const repositoryQuery = ref("");
-const customRepository = ref("");
-const repositoryMessage = ref("");
-const errorMessage = ref("");
-const result = ref<LeaderboardResult>();
-const progress = ref<CalculationProgress>();
-const isLoadingRepositories = ref(false);
-const isCalculating = ref(false);
+interface ErrorState {
+  status: "error";
+  message: string;
+}
 
-const hasEnvironmentToken =
-  environmentToken != null && environmentToken !== "";
+interface ReadyState {
+  status: "ready";
+  dataset: LeaderboardDataset;
+  result: LeaderboardResult;
+  draftRange: DateRange;
+  rangeError: string;
+}
 
-const filteredRepositoryOptions = computed<RepositoryOption[]>(() => {
-  const query = repositoryQuery.value.trim().toLowerCase();
-  if (query === "") {
-    return repositoryOptions.value;
+type ViewState = LoadingState | ErrorState | ReadyState;
+
+const viewState = shallowRef<ViewState>({ status: "loading" });
+const appLocation = shallowRef<AppLocation>(
+  parseAppLocation(window.location.hash),
+);
+
+const readyState = computed<ReadyState | undefined>(() =>
+  viewState.value.status === "ready" ? viewState.value : undefined,
+);
+
+const draftStart = computed<string>({
+  get: () => requireReadyState().draftRange.start,
+  set: (start) => {
+    const state = requireReadyState();
+    viewState.value = {
+      ...state,
+      draftRange: { ...state.draftRange, start },
+      rangeError: "",
+    };
+  },
+});
+
+const draftEnd = computed<string>({
+  get: () => requireReadyState().draftRange.end,
+  set: (end) => {
+    const state = requireReadyState();
+    viewState.value = {
+      ...state,
+      draftRange: { ...state.draftRange, end },
+      rangeError: "",
+    };
+  },
+});
+
+const currentContributor = computed(() => {
+  const state = readyState.value;
+  const route = appLocation.value.route;
+  if (state == null || route.name !== "person") {
+    return undefined;
   }
-  return repositoryOptions.value.filter(
-    (repository) =>
-      repository.name.toLowerCase().includes(query) ||
-      repository.description.toLowerCase().includes(query),
+  return state.result.contributors.find(
+    (contributor) =>
+      contributor.login.toLowerCase() === route.login.toLowerCase(),
   );
 });
 
-const progressPercent = computed<number>(() => {
-  if (progress.value == null || progress.value.total === 0) {
-    return 0;
+const currentPull = computed(() => {
+  const state = readyState.value;
+  const route = appLocation.value.route;
+  if (state == null || route.name !== "pull") {
+    return undefined;
   }
-  return Math.round(
-    (progress.value.completed / progress.value.total) * 100,
+  return state.dataset.pulls.find((pull) => pull.key === route.key);
+});
+
+const currentPullWorkstream = computed(() => {
+  const state = readyState.value;
+  const pull = currentPull.value;
+  if (state == null || pull == null) {
+    return undefined;
+  }
+  return state.result.workstreams.find((workstream) =>
+    workstream.pulls.some((candidate) => candidate.key === pull.key),
   );
 });
 
-async function loadRepositories(): Promise<void> {
-  errorMessage.value = "";
-  repositoryMessage.value = "";
-  const normalizedOrganization = organization.value.trim();
-  if (
-    /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(
-      normalizedOrganization,
-    ) === false
-  ) {
-    errorMessage.value = "Organization の形式が正しくありません。";
-    return;
+const currentIssue = computed(() => {
+  const state = readyState.value;
+  const route = appLocation.value.route;
+  if (state == null || route.name !== "issue") {
+    return undefined;
   }
+  return state.dataset.issues.find((issue) => issue.key === route.key);
+});
 
-  isLoadingRepositories.value = true;
-  try {
-    const repositories = await fetchRepositoryOptions(
-      normalizedOrganization,
-      token.value,
-    );
-    repositoryOptions.value = repositories;
-    repositoryMessage.value =
-      repositories.length + " 件のリポジトリを取得しました。";
-  } catch (error) {
-    console.error("リポジトリ一覧の取得に失敗しました", error);
-    errorMessage.value = describeError(error);
-  } finally {
-    isLoadingRepositories.value = false;
+const currentIssueWorkstreams = computed(() => {
+  const state = readyState.value;
+  const issue = currentIssue.value;
+  if (state == null || issue == null) {
+    return [];
   }
-}
-
-function addCustomRepository(): void {
-  const name = customRepository.value.trim();
-  if (/^[A-Za-z0-9_.-]+$/.test(name) === false) {
-    repositoryMessage.value =
-      "リポジトリ名だけを入力してください。owner は Organization 欄を使います。";
-    return;
-  }
-  if (
-    selectedRepositoryNames.value.some(
-      (repository) => repository.toLowerCase() === name.toLowerCase(),
-    ) === false
-  ) {
-    selectedRepositoryNames.value.push(name);
-  }
-  customRepository.value = "";
-  repositoryMessage.value = "";
-}
-
-function removeRepository(name: string): void {
-  selectedRepositoryNames.value = selectedRepositoryNames.value.filter(
-    (repository) => repository !== name,
+  return state.result.workstreams.filter(
+    (workstream) => workstream.issue?.key === issue.key,
   );
-}
+});
 
-function selectAllActiveRepositories(): void {
-  selectedRepositoryNames.value = repositoryOptions.value
-    .filter(
-      (repository) =>
-        repository.archived === false && repository.fork === false,
-    )
-    .map((repository) => repository.name);
-}
-
-function selectRecommendedRepositories(): void {
-  selectedRepositoryNames.value = [...recommendedRepositories];
-}
-
-function clearRepositories(): void {
-  selectedRepositoryNames.value = [];
-}
-
-function setMonth(offset: number): void {
-  const range = monthRange(offset);
-  startDate.value = range.start;
-  endDate.value = range.end;
-}
-
-async function runCalculation(): Promise<void> {
-  errorMessage.value = "";
-  progress.value = undefined;
-  result.value = undefined;
-  const repositoryNames = [...new Set(selectedRepositoryNames.value)];
-  let scope;
-  try {
-    scope = parseCalculationScope({
-      organization: organization.value,
-      repositories: repositoryNames.map(
-        (repository) => organization.value.trim() + "/" + repository,
-      ),
-      range: {
-        start: startDate.value,
-        end: endDate.value,
-      },
-    });
-  } catch (error) {
-    errorMessage.value = describeError(error);
-    return;
+const currentStandaloneIssue = computed(() => {
+  const state = readyState.value;
+  const issue = currentIssue.value;
+  if (state == null || issue == null) {
+    return undefined;
   }
+  return state.result.standaloneIssues.find(
+    (standalone) => standalone.key === issue.key,
+  );
+});
 
-  isCalculating.value = true;
+onMounted(() => {
+  window.addEventListener("hashchange", handleHashChange);
+  void loadDataset();
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("hashchange", handleHashChange);
+});
+
+async function loadDataset(): Promise<void> {
   try {
-    result.value = await calculateLeaderboard(
-      scope,
-      token.value,
-      (nextProgress) => {
-        progress.value = nextProgress;
-      },
+    const response = await fetch(
+      import.meta.env.BASE_URL + "data/leaderboard-data.json",
+      { cache: "no-cache" },
+    );
+    if (response.ok === false) {
+      throw new Error(
+        "事前取得データを読み込めません。HTTP " + response.status,
+      );
+    }
+    let raw: unknown;
+    try {
+      raw = await response.json();
+    } catch (error) {
+      throw new Error("事前取得データを JSON として解釈できません。", {
+        cause: error,
+      });
+    }
+    const dataset = parseLeaderboardDataset(raw);
+    const location = parseAppLocation(window.location.hash);
+    const fallbackRange = createInitialRange(dataset.range);
+    const range = resolveLocationRange(location, fallbackRange, dataset.range);
+    const result = calculateLeaderboard(dataset, range);
+    viewState.value = {
+      status: "ready",
+      dataset,
+      result,
+      draftRange: range,
+      rangeError: "",
+    };
+    appLocation.value = { route: location.route, range };
+    window.history.replaceState(
+      null,
+      "",
+      routeHref(location.route, range),
     );
   } catch (error) {
-    console.error("リーダーボードの計算に失敗しました", error);
-    errorMessage.value = describeError(error);
-  } finally {
-    isCalculating.value = false;
+    console.error("事前取得データの読み込みに失敗しました", error);
+    viewState.value = {
+      status: "error",
+      message: describeError(error),
+    };
   }
 }
 
-function monthRange(offset: number): { start: string; end: string } {
-  const now = new Date();
-  const firstDay = new Date(now.getFullYear(), now.getMonth() + offset, 1);
-  const isCurrentMonth = offset === 0;
-  const lastDay = isCurrentMonth
-    ? now
-    : new Date(now.getFullYear(), now.getMonth() + offset + 1, 0);
-  return {
-    start: formatLocalDate(firstDay),
-    end: formatLocalDate(lastDay),
+function applyRange(): void {
+  const state = requireReadyState();
+  try {
+    const range = parseDateRange(state.draftRange, state.dataset.range);
+    const result = calculateLeaderboard(state.dataset, range);
+    viewState.value = {
+      ...state,
+      result,
+      draftRange: range,
+      rangeError: "",
+    };
+    const location: AppLocation = {
+      route: appLocation.value.route,
+      range,
+    };
+    appLocation.value = location;
+    window.location.hash = routeHref(location.route, range);
+  } catch (error) {
+    viewState.value = {
+      ...state,
+      rangeError: describeError(error),
+    };
+  }
+}
+
+function setAllRange(): void {
+  const state = requireReadyState();
+  viewState.value = {
+    ...state,
+    draftRange: state.dataset.range,
+    rangeError: "",
   };
 }
 
-function formatLocalDate(date: Date): string {
-  const year = String(date.getFullYear());
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return year + "-" + month + "-" + day;
+function setRecentDays(dayCount: number): void {
+  const state = requireReadyState();
+  const start = subtractDays(state.dataset.range.end, dayCount - 1);
+  viewState.value = {
+    ...state,
+    draftRange: {
+      start: start < state.dataset.range.start ? state.dataset.range.start : start,
+      end: state.dataset.range.end,
+    },
+    rangeError: "",
+  };
+}
+
+function handleHashChange(): void {
+  const location = parseAppLocation(window.location.hash);
+  const state = readyState.value;
+  if (state == null) {
+    appLocation.value = location;
+    return;
+  }
+  if (
+    location.range != null &&
+    rangesEqual(location.range, state.result.range) === false
+  ) {
+    try {
+      const range = parseDateRange(location.range, state.dataset.range);
+      viewState.value = {
+        ...state,
+        result: calculateLeaderboard(state.dataset, range),
+        draftRange: range,
+        rangeError: "",
+      };
+    } catch (error) {
+      console.warn("URL の対象期間を適用できません", error);
+    }
+  }
+  appLocation.value = location;
+}
+
+function resolveLocationRange(
+  location: AppLocation,
+  fallbackRange: DateRange,
+  availableRange: DateRange,
+): DateRange {
+  if (location.range == null) {
+    return fallbackRange;
+  }
+  try {
+    return parseDateRange(location.range, availableRange);
+  } catch (error) {
+    console.warn("URL の対象期間を適用できないため既定期間を使います", error);
+    return fallbackRange;
+  }
+}
+
+function createInitialRange(availableRange: DateRange): DateRange {
+  const recentStart = subtractDays(availableRange.end, 29);
+  return {
+    start:
+      recentStart < availableRange.start ? availableRange.start : recentStart,
+    end: availableRange.end,
+  };
+}
+
+function subtractDays(value: string, dayCount: number): string {
+  const date = new Date(value + "T00:00:00Z");
+  if (Number.isNaN(date.getTime())) {
+    throw new Error("日付を解釈できません: " + value);
+  }
+  date.setUTCDate(date.getUTCDate() - dayCount);
+  return date.toISOString().slice(0, 10);
+}
+
+function rangesEqual(left: DateRange, right: DateRange): boolean {
+  return left.start === right.start && left.end === right.end;
+}
+
+function requireReadyState(): ReadyState {
+  const state = viewState.value;
+  if (state.status !== "ready") {
+    throw new Error("事前取得データの読み込みが完了していません。");
+  }
+  return state;
 }
 
 function formatDateTime(value: string): string {
   return new Intl.DateTimeFormat("ja-JP", {
-    dateStyle: "short",
+    dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value));
 }
@@ -213,7 +321,7 @@ function describeError(error: unknown): string {
     return error.message;
   }
   console.error("Error 以外の値が投げられました", error);
-  return "想定外のエラーが発生しました。開発者ツールのコンソールを確認してください。";
+  return "想定外のエラーが発生しました。";
 }
 </script>
 
@@ -222,7 +330,7 @@ function describeError(error: unknown): string {
     <header class="border-b border-line bg-surface">
       <div class="mx-auto flex max-w-7xl items-center justify-between gap-4 px-5 py-4 sm:px-8">
         <a
-          href="#"
+          :href="readyState == null ? '#/' : routeHref({ name: 'home' }, readyState.result.range)"
           class="font-display text-sm font-semibold tracking-wide"
         >
           VOICEVOX Contribution Score
@@ -233,400 +341,199 @@ function describeError(error: unknown): string {
       </div>
     </header>
 
-    <main>
-      <section class="relative border-b border-line">
-        <div class="mx-auto grid max-w-7xl gap-10 px-5 py-12 sm:px-8 lg:grid-cols-[minmax(0,0.9fr)_minmax(28rem,1.1fr)] lg:py-16">
-          <div class="self-center">
-            <p class="text-xs font-semibold tracking-[0.2em] text-accent uppercase">
-              Live GitHub calculation
-            </p>
-            <h1 class="mt-4 max-w-2xl font-display text-4xl leading-[1.15] font-semibold tracking-tight sm:text-5xl">
-              貢献の形が違っても、
-              <span class="text-accent-dark">一つの成果</span>として測る。
-            </h1>
-            <p class="mt-6 max-w-xl text-base leading-8 text-muted">
-              関連 Issue ごとにマージ済み PR をまとめ、実装、レビュー、調査を一つの
-              VOICEVOX Contribution Score へ変換します。すべてブラウザ内で計算し、
-              入力したトークンは保存しません。
-            </p>
+    <main
+      v-if="viewState.status === 'loading'"
+      class="mx-auto max-w-3xl px-5 py-24 text-center"
+    >
+      <span class="inline-block size-7 animate-spin rounded-full border-2 border-line border-t-accent" />
+      <p class="mt-4 font-semibold">
+        事前取得データを読み込んでいます
+      </p>
+    </main>
 
-            <dl class="mt-8 grid max-w-lg grid-cols-3 divide-x divide-line border-y border-line py-4">
-              <div class="pr-4">
-                <dt class="text-xs text-muted">
-                  実装枠
-                </dt>
-                <dd class="mt-1 font-display text-2xl font-semibold">
-                  65%
-                </dd>
-              </div>
-              <div class="px-4">
-                <dt class="text-xs text-muted">
-                  レビュー枠
-                </dt>
-                <dd class="mt-1 font-display text-2xl font-semibold">
-                  20%
-                </dd>
-              </div>
-              <div class="pl-4">
-                <dt class="text-xs text-muted">
-                  Issue 枠
-                </dt>
-                <dd class="mt-1 font-display text-2xl font-semibold">
-                  15%
-                </dd>
-              </div>
-            </dl>
-          </div>
+    <main
+      v-else-if="viewState.status === 'error'"
+      class="mx-auto max-w-3xl px-5 py-24"
+    >
+      <div class="rounded-2xl border border-danger/30 bg-red-50 p-6 text-danger">
+        <h1 class="font-display text-xl font-semibold">
+          リーダーボードを表示できません
+        </h1>
+        <p class="mt-2 text-sm leading-7">
+          {{ viewState.message }}
+        </p>
+      </div>
+    </main>
 
-          <form
-            class="rounded-3xl border border-line bg-surface p-5 shadow-[0_18px_60px_rgba(34,52,45,0.08)] sm:p-7"
-            @submit.prevent="runCalculation"
-          >
-            <div class="flex items-center justify-between gap-3">
-              <div>
-                <p class="text-xs font-semibold tracking-wide text-muted uppercase">
-                  Target scope
-                </p>
-                <h2 class="mt-1 font-display text-xl font-semibold">
-                  計算対象
-                </h2>
-              </div>
-              <span class="text-xs text-muted">{{ selectedRepositoryNames.length }} repos</span>
-            </div>
-
-            <div class="mt-6 grid gap-4 sm:grid-cols-[minmax(0,1fr)_auto]">
-              <label class="block">
-                <span class="text-sm font-semibold">Organization</span>
-                <input
-                  v-model="organization"
-                  type="text"
-                  autocomplete="off"
-                  required
-                  class="mt-2 w-full rounded-xl border border-line bg-white px-3.5 py-2.5 text-sm"
-                >
-              </label>
-              <button
-                type="button"
-                :disabled="isLoadingRepositories || isCalculating"
-                class="self-end rounded-xl border border-line px-4 py-2.5 text-sm font-semibold hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
-                @click="loadRepositories"
-              >
-                <span
-                  v-if="isLoadingRepositories"
-                  class="mr-2 inline-block size-3 animate-spin rounded-full border-2 border-line border-t-accent"
-                />
-                候補を取得
-              </button>
-            </div>
-
-            <fieldset class="mt-5">
-              <div class="flex flex-wrap items-center justify-between gap-2">
-                <legend class="text-sm font-semibold">
-                  対象リポジトリ
-                </legend>
-                <div class="flex gap-3 text-xs">
-                  <button
-                    v-if="repositoryOptions.length > 0"
-                    type="button"
-                    class="text-accent hover:underline"
-                    @click="selectAllActiveRepositories"
-                  >
-                    有効な候補を全選択
-                  </button>
-                  <button
-                    v-if="organization.toLowerCase() === 'voicevox'"
-                    type="button"
-                    class="text-accent hover:underline"
-                    @click="selectRecommendedRepositories"
-                  >
-                    推奨範囲
-                  </button>
-                  <button
-                    type="button"
-                    class="text-muted hover:underline"
-                    @click="clearRepositories"
-                  >
-                    解除
-                  </button>
+    <template v-else-if="readyState != null">
+      <main v-if="appLocation.route.name === 'home'">
+        <section class="border-b border-line">
+          <div class="mx-auto grid max-w-7xl gap-10 px-5 py-12 sm:px-8 lg:grid-cols-[minmax(0,1fr)_minmax(26rem,0.8fr)] lg:py-16">
+            <div class="self-center">
+              <p class="text-xs font-semibold tracking-[0.2em] text-accent uppercase">
+                Precomputed GitHub data
+              </p>
+              <h1 class="mt-4 max-w-2xl font-display text-4xl leading-[1.15] font-semibold tracking-tight sm:text-5xl">
+                貢献の形が違っても、
+                <span class="text-accent-dark">一つの成果</span>として測る。
+              </h1>
+              <p class="mt-6 max-w-xl text-base leading-8 text-muted">
+                VOICEVOX の公開かつ非アーカイブな全リポジトリから、関連 Issue、実装、レビュー、調査を一つの点数へ変換します。
+                GitHub API の取得と本文解析は事前に完了しています。
+              </p>
+              <dl class="mt-8 grid max-w-xl grid-cols-3 divide-x divide-line border-y border-line py-4">
+                <div class="pr-4">
+                  <dt class="text-xs text-muted">
+                    リポジトリ
+                  </dt>
+                  <dd class="mt-1 font-display text-2xl font-semibold">
+                    {{ readyState.dataset.repositories.length }}
+                  </dd>
                 </div>
-              </div>
+                <div class="px-4">
+                  <dt class="text-xs text-muted">
+                    取得済み PR
+                  </dt>
+                  <dd class="mt-1 font-display text-2xl font-semibold">
+                    {{ readyState.dataset.pulls.length }}
+                  </dd>
+                </div>
+                <div class="pl-4">
+                  <dt class="text-xs text-muted">
+                    取得済み Issue
+                  </dt>
+                  <dd class="mt-1 font-display text-2xl font-semibold">
+                    {{ readyState.dataset.issues.length }}
+                  </dd>
+                </div>
+              </dl>
+            </div>
 
-              <div class="mt-2 flex min-h-12 flex-wrap gap-2 rounded-xl border border-line bg-paper/50 p-2">
-                <span
-                  v-for="repository in selectedRepositoryNames"
-                  :key="repository"
-                  class="inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-medium shadow-sm"
-                >
-                  {{ repository }}
-                  <button
-                    type="button"
-                    :aria-label="repository + ' を対象から外す'"
-                    class="text-muted hover:text-danger"
-                    @click="removeRepository(repository)"
-                  >
-                    ×
-                  </button>
-                </span>
-                <span
-                  v-if="selectedRepositoryNames.length === 0"
-                  class="self-center px-2 text-xs text-muted"
-                >
-                  リポジトリを追加してください
-                </span>
-              </div>
+            <form
+              class="self-center rounded-3xl border border-line bg-surface p-6 shadow-[0_18px_60px_rgba(34,52,45,0.08)] sm:p-7"
+              @submit.prevent="applyRange"
+            >
+              <p class="text-xs font-semibold tracking-wide text-muted uppercase">
+                Target range
+              </p>
+              <h2 class="mt-1 font-display text-xl font-semibold">
+                表示する期間
+              </h2>
+              <p class="mt-3 text-sm leading-6 text-muted">
+                取得済み期間 {{ readyState.dataset.range.start }} —
+                {{ readyState.dataset.range.end }} の範囲で指定できます。
+              </p>
 
-              <div class="mt-2 flex gap-2">
-                <input
-                  v-model="customRepository"
-                  type="text"
-                  autocomplete="off"
-                  placeholder="リポジトリ名を直接追加"
-                  class="min-w-0 flex-1 rounded-xl border border-line bg-white px-3.5 py-2 text-sm"
-                  @keydown.enter.prevent="addCustomRepository"
-                >
+              <div class="mt-5 flex flex-wrap gap-3 text-xs">
                 <button
                   type="button"
-                  class="rounded-xl border border-line px-4 py-2 text-sm font-semibold hover:border-accent hover:text-accent"
-                  @click="addCustomRepository"
+                  class="font-semibold text-accent hover:underline"
+                  @click="setRecentDays(7)"
                 >
-                  追加
+                  直近 7 日
+                </button>
+                <button
+                  type="button"
+                  class="font-semibold text-accent hover:underline"
+                  @click="setRecentDays(30)"
+                >
+                  直近 30 日
+                </button>
+                <button
+                  type="button"
+                  class="font-semibold text-accent hover:underline"
+                  @click="setAllRange"
+                >
+                  取得済み全期間
                 </button>
               </div>
 
-              <div
-                v-if="repositoryOptions.length > 0"
-                class="mt-3 rounded-xl border border-line bg-white p-3"
-              >
+              <div class="mt-4 grid grid-cols-[1fr_auto_1fr] items-center gap-2">
                 <input
-                  v-model="repositoryQuery"
-                  type="search"
-                  placeholder="候補を絞り込み"
-                  class="w-full rounded-lg border border-line px-3 py-2 text-sm"
-                >
-                <div class="mt-2 max-h-44 overflow-y-auto">
-                  <label
-                    v-for="repository in filteredRepositoryOptions"
-                    :key="repository.name"
-                    class="flex items-start gap-3 border-b border-line/70 py-2 last:border-b-0"
-                    :class="repository.archived || repository.fork ? 'text-muted' : 'cursor-pointer'"
-                  >
-                    <input
-                      v-model="selectedRepositoryNames"
-                      type="checkbox"
-                      :value="repository.name"
-                      :disabled="repository.archived || repository.fork"
-                      class="mt-1 accent-accent"
-                    >
-                    <span class="min-w-0">
-                      <span class="text-sm font-medium">{{ repository.name }}</span>
-                      <span
-                        v-if="repository.archived"
-                        class="ml-2 text-xs"
-                      >アーカイブ</span>
-                      <span
-                        v-if="repository.fork"
-                        class="ml-2 text-xs"
-                      >fork または mirror</span>
-                      <span
-                        v-if="repository.description !== ''"
-                        class="block truncate text-xs text-muted"
-                      >
-                        {{ repository.description }}
-                      </span>
-                    </span>
-                  </label>
-                </div>
-              </div>
-              <p
-                v-if="repositoryMessage !== ''"
-                class="mt-2 text-xs text-muted"
-              >
-                {{ repositoryMessage }}
-              </p>
-            </fieldset>
-
-            <fieldset class="mt-5">
-              <div class="flex items-center justify-between gap-3">
-                <legend class="text-sm font-semibold">
-                  対象期間
-                </legend>
-                <div class="flex gap-3 text-xs">
-                  <button
-                    type="button"
-                    class="text-accent hover:underline"
-                    @click="setMonth(-1)"
-                  >
-                    前月
-                  </button>
-                  <button
-                    type="button"
-                    class="text-accent hover:underline"
-                    @click="setMonth(0)"
-                  >
-                    今月
-                  </button>
-                </div>
-              </div>
-              <div class="mt-2 grid grid-cols-[1fr_auto_1fr] items-center gap-2">
-                <input
-                  v-model="startDate"
+                  v-model="draftStart"
                   type="date"
                   required
+                  :min="readyState.dataset.range.start"
+                  :max="readyState.dataset.range.end"
                   class="min-w-0 rounded-xl border border-line bg-white px-3 py-2.5 text-sm"
                 >
                 <span class="text-muted">—</span>
                 <input
-                  v-model="endDate"
+                  v-model="draftEnd"
                   type="date"
                   required
+                  :min="readyState.dataset.range.start"
+                  :max="readyState.dataset.range.end"
                   class="min-w-0 rounded-xl border border-line bg-white px-3 py-2.5 text-sm"
                 >
               </div>
-            </fieldset>
-
-            <label class="mt-5 block">
-              <span class="flex items-center justify-between gap-2 text-sm font-semibold">
-                GitHub token
-                <span
-                  v-if="hasEnvironmentToken"
-                  class="rounded-full bg-accent-soft px-2 py-0.5 text-[0.68rem] text-accent-dark"
-                >
-                  環境変数から読込済み
-                </span>
-              </span>
-              <input
-                v-model="token"
-                type="password"
-                autocomplete="off"
-                placeholder="未入力でも公開 API を利用できます"
-                class="mt-2 w-full rounded-xl border border-line bg-white px-3.5 py-2.5 text-sm"
-              >
-              <span class="mt-1.5 block text-xs leading-5 text-muted">
-                トークンはブラウザのメモリ内だけで使用します。未入力時の API 上限は低いため、
-                通常は読み取り権限だけの fine-grained token を使用してください。
-              </span>
-            </label>
-
-            <button
-              type="submit"
-              :disabled="isCalculating || isLoadingRepositories"
-              class="mt-6 flex w-full items-center justify-center rounded-xl bg-accent px-5 py-3 text-sm font-semibold text-white hover:bg-accent-dark disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <span
-                v-if="isCalculating"
-                class="mr-2 inline-block size-4 animate-spin rounded-full border-2 border-white/40 border-t-white"
-              />
-              {{ isCalculating ? "GitHub から取得中" : "実データで計算する" }}
-            </button>
-          </form>
-        </div>
-      </section>
-
-      <div class="mx-auto max-w-7xl px-5 py-10 sm:px-8">
-        <div
-          v-if="errorMessage !== ''"
-          role="alert"
-          class="mb-8 rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm leading-6 text-danger"
-        >
-          <p class="font-semibold">
-            計算を完了できませんでした
-          </p>
-          <p class="mt-1 whitespace-pre-line">
-            {{ errorMessage }}
-          </p>
-        </div>
-
-        <div
-          v-if="isCalculating && progress != null"
-          class="mb-8 rounded-2xl border border-line bg-surface p-5"
-          aria-live="polite"
-        >
-          <div class="flex justify-between gap-4 text-sm">
-            <span class="font-semibold">{{ progress.message }}</span>
-            <span class="font-mono text-muted">{{ progress.completed }} / {{ progress.total }}</span>
-          </div>
-          <div class="mt-3 h-2 overflow-hidden rounded-full bg-line">
-            <div
-              class="h-full rounded-full bg-accent"
-              :style="{ width: progressPercent + '%' }"
-            />
-          </div>
-          <p class="mt-2 text-xs text-muted">
-            選択範囲によっては数分かかります。このタブを開いたままお待ちください。
-          </p>
-        </div>
-
-        <template v-if="result != null">
-          <section
-            aria-label="計算概要"
-            class="mb-10 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"
-          >
-            <div class="rounded-2xl border border-line bg-surface p-4">
-              <p class="text-xs text-muted">
-                貢献者
-              </p>
-              <p class="mt-1 font-display text-2xl font-semibold">
-                {{ result.contributors.length }}
-              </p>
-            </div>
-            <div class="rounded-2xl border border-line bg-surface p-4">
-              <p class="text-xs text-muted">
-                ワークストリーム
-              </p>
-              <p class="mt-1 font-display text-2xl font-semibold">
-                {{ result.workstreams.length }}
-              </p>
-            </div>
-            <div class="rounded-2xl border border-line bg-surface p-4">
-              <p class="text-xs text-muted">
-                独立 Issue
-              </p>
-              <p class="mt-1 font-display text-2xl font-semibold">
-                {{ result.standaloneIssues.length }}
-              </p>
-            </div>
-            <div class="rounded-2xl border border-line bg-surface p-4">
-              <p class="text-xs text-muted">
-                GitHub API
-              </p>
-              <p class="mt-1 font-display text-2xl font-semibold">
-                {{ result.requestCount }} requests
-              </p>
               <p
-                v-if="result.rateLimit != null"
-                class="mt-1 text-[0.68rem] text-muted"
+                v-if="readyState.rangeError !== ''"
+                class="mt-3 text-sm text-danger"
               >
-                最終 API 区分の残り {{ result.rateLimit.remaining }} /
-                {{ result.rateLimit.limit }} ・
-                {{ formatDateTime(result.rateLimit.resetsAt) }} リセット
+                {{ readyState.rangeError }}
               </p>
-            </div>
-          </section>
-
-          <LeaderboardTable :result="result" />
-          <div class="my-14 border-t border-line" />
-          <WorkstreamList :result="result" />
-          <div class="mt-14">
-            <MethodologyPanel :notices="result.notices" />
+              <button
+                type="submit"
+                class="mt-5 w-full rounded-xl bg-accent px-5 py-3 text-sm font-semibold text-white hover:bg-accent-dark"
+              >
+                この期間を表示する
+              </button>
+              <p class="mt-3 text-xs leading-5 text-muted">
+                データ更新 {{ formatDateTime(readyState.dataset.generatedAt) }}
+              </p>
+            </form>
           </div>
-        </template>
-
-        <section
-          v-else-if="isCalculating === false"
-          class="rounded-3xl border border-dashed border-line px-6 py-14 text-center"
-        >
-          <p class="font-display text-xl font-semibold">
-            まだ計算結果はありません
-          </p>
-          <p class="mt-2 text-sm text-muted">
-            上の対象範囲を確認して、実データで計算してください。
-          </p>
         </section>
-      </div>
-    </main>
 
-    <footer class="border-t border-line px-5 py-6 text-center text-xs text-muted">
-      GitHub 上で観測できる活動だけを対象にした検証用プロトタイプです。
-    </footer>
+        <div class="mx-auto max-w-7xl space-y-14 px-5 py-12 sm:px-8 sm:py-16">
+          <LeaderboardTable :result="readyState.result" />
+          <WorkstreamList :result="readyState.result" />
+          <MethodologyPanel :notices="readyState.dataset.notices" />
+        </div>
+      </main>
+
+      <PersonPage
+        v-else-if="appLocation.route.name === 'person' && currentContributor != null"
+        :contributor="currentContributor"
+        :range="readyState.result.range"
+      />
+
+      <PullPage
+        v-else-if="appLocation.route.name === 'pull' && currentPull != null"
+        :pull="currentPull"
+        :workstream="currentPullWorkstream"
+        :range="readyState.result.range"
+      />
+
+      <IssuePage
+        v-else-if="appLocation.route.name === 'issue' && currentIssue != null"
+        :issue="currentIssue"
+        :workstreams="currentIssueWorkstreams"
+        :standalone="currentStandaloneIssue"
+        :range="readyState.result.range"
+      />
+
+      <main
+        v-else
+        class="mx-auto max-w-3xl px-5 py-24 text-center"
+      >
+        <p class="text-xs font-semibold tracking-[0.18em] text-accent uppercase">
+          Not found
+        </p>
+        <h1 class="mt-3 font-display text-3xl font-semibold">
+          対象のページが見つかりません
+        </h1>
+        <p class="mt-3 text-sm text-muted">
+          選択期間に人物の配点がないか、取得済みデータに項目がありません。
+        </p>
+        <a
+          :href="routeHref({ name: 'home' }, readyState.result.range)"
+          class="mt-6 inline-block font-semibold text-accent hover:underline"
+        >
+          リーダーボードへ戻る
+        </a>
+      </main>
+    </template>
   </div>
 </template>

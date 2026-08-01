@@ -1,4 +1,4 @@
-import { assertNonNullable } from "./errors";
+import { assertNonNullable } from "./errors.ts";
 
 export type ReferenceHint = "issue" | "pull" | "unknown";
 

@@ -23,6 +23,8 @@ export default [
     languageOptions: {
       globals: {
         console: "readonly",
+        fetch: "readonly",
+        window: "readonly",
       },
     },
     rules: {
@@ -42,6 +44,12 @@ export default [
         },
       ],
       "vue/multi-word-component-names": "off",
+    },
+  },
+  {
+    files: ["scripts/**/*.ts"],
+    rules: {
+      "no-console": ["error", { allow: ["error", "warn", "log"] }],
     },
   },
 ];

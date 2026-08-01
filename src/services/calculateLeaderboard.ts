@@ -1,70 +1,31 @@
-import { assertNonNullable, UnreachableError } from "../domain/errors";
-import {
-  detectEvidenceKinds,
-  isSubstantiveIssueText,
-  isSubstantiveReviewText,
-} from "../domain/evidence";
+import { assertNonNullable, UnreachableError } from "../domain/errors.ts";
 import type {
   Actor,
-  CalculationProgress,
-  CalculationScope,
   ContributorScore,
   DateRange,
   EvidenceKind,
   IssueReference,
+  LeaderboardDataset,
   LeaderboardResult,
-  PullScore,
-  RepositoryOption,
+  PreparedIssue,
+  PreparedPull,
   ScoreAllocation,
   ScoreEntry,
+  SourceReference,
   StandaloneIssueScore,
   WorkstreamScore,
-} from "../domain/model";
+} from "../domain/model.ts";
 import {
-  calculateConventionalBonus,
-  calculateFileScore,
   calculateImportance,
-  calculatePullMass,
   calculateStandaloneIssueScore,
   totalAllocations,
-} from "../domain/scoring";
-import { GitHubClient } from "./githubClient";
-import type {
-  GithubIssue,
-  GithubIssueComment,
-  GithubPull,
-  GithubPullCommit,
-  GithubPullReview,
-  GithubReviewComment,
-  GithubUser,
-} from "./githubSchemas";
-import {
-  WorkstreamResolver,
-  type ResolvedIssue,
-} from "./workstreamResolver";
-
-interface PullTarget {
-  repository: string;
-  number: number;
-}
-
-interface ProcessedPull {
-  score: PullScore;
-  pull: GithubPull;
-  reviews: GithubPullReview[];
-  reviewComments: GithubReviewComment[];
-  authorIsHuman: boolean;
-}
-
-interface ResolvedPull {
-  processed: ProcessedPull;
-  issue: ResolvedIssue | undefined;
-}
+} from "../domain/scoring.ts";
+import { parseDateRange } from "./calculationScope.ts";
 
 interface WorkstreamGroup {
   key: string;
-  issue: ResolvedIssue | undefined;
-  pulls: ProcessedPull[];
+  issue?: PreparedIssue;
+  pulls: PreparedPull[];
 }
 
 interface WeightedActor {
@@ -88,326 +49,95 @@ interface ReviewActivity {
   hasSummary: boolean;
 }
 
-const acceptedReviewStates = new Set([
-  "APPROVED",
-  "CHANGES_REQUESTED",
-  "COMMENTED",
-]);
-
-const standaloneNotices = [
-  "Issue の作成、Close、コメントは選択期間内のイベントだけを配点します。期間をまたぐ加点履歴は保存しません。",
-  "Issue 候補は更新日、作成日、Close 日の検索結果を統合します。期間内にコメントだけがあり、その後にも更新された Issue は GitHub Search API だけでは発見できません。",
-  "独立 Issue とマージ済み PR の関連判定は、今回計算したワークストリームを対象にします。期間外の PR との関連はプロトタイプでは追跡しません。",
-  "古い Issue の本文編集日時は GitHub API から特定できないため、本文の証拠要素は Issue 作成日が選択期間内の場合だけ数えます。",
-  "複数 PR の Conventional Commits 補正は、PR 分割による加点を防ぐため最大値を 1 回だけ使います。",
-  "共同作者は GitHub がコミット作者へ関連付けたアカウントと、GitHub noreply 形式の Co-authored-by だけを自動解決します。",
-];
-
-/** Organization のリポジトリを選択肢として取得する。 */
-export async function fetchRepositoryOptions(
-  organization: string,
-  token: string,
-): Promise<RepositoryOption[]> {
-  const client = new GitHubClient(token.trim());
-  const repositories =
-    await client.listOrganizationRepositories(organization.trim());
-  return repositories
-    .map((repository) => ({
-      name: repository.name,
-      description: repository.description ?? "",
-      archived: repository.archived,
-      fork: repository.fork || repository.mirror_url != null,
-    }))
-    .sort((left, right) => left.name.localeCompare(right.name));
-}
-
-/** GitHub の実データから貢献者ランキングを計算する。 */
-export async function calculateLeaderboard(
-  scope: CalculationScope,
-  token: string,
-  onProgress: (progress: CalculationProgress) => void,
-): Promise<LeaderboardResult> {
-  const client = new GitHubClient(token.trim());
-  const resolver = new WorkstreamResolver(client, scope.organization);
-
-  onProgress({
-    phase: "search",
-    message: "マージ済み PR を検索しています",
-    completed: 0,
-    total: scope.repositories.length,
-  });
-  let searchedRepositories = 0;
-  const pullTargetGroups = await mapWithConcurrency(
-    scope.repositories,
-    3,
-    async (repository) => {
-      const numbers = await client.searchMergedPullNumbers(
-        repository,
-        scope.range,
-      );
-      searchedRepositories += 1;
-      onProgress({
-        phase: "search",
-        message: "マージ済み PR を検索しています",
-        completed: searchedRepositories,
-        total: scope.repositories.length,
-      });
-      return numbers.map((number) => ({ repository, number }));
-    },
+/** 事前取得データを指定期間のリーダーボードへ変換する。 */
+export function calculateLeaderboard(
+  dataset: LeaderboardDataset,
+  requestedRange: DateRange,
+): LeaderboardResult {
+  const range = parseDateRange(requestedRange, dataset.range);
+  const issueByKey = new Map(
+    dataset.issues.map((issue) => [issue.key, issue]),
   );
-  const pullTargets = pullTargetGroups.flat();
-
-  onProgress({
-    phase: "pulls",
-    message: "PR の変更、レビュー、共同作者を取得しています",
-    completed: 0,
-    total: pullTargets.length,
-  });
-  let processedPullCount = 0;
-  const processedPulls = await mapWithConcurrency(
-    pullTargets,
-    3,
-    async (target) => {
-      const processed = await processPull(client, target);
-      processedPullCount += 1;
-      onProgress({
-        phase: "pulls",
-        message: "PR の変更、レビュー、共同作者を取得しています",
-        completed: processedPullCount,
-        total: pullTargets.length,
-      });
-      return processed;
-    },
+  const pulls = dataset.pulls.filter((pull) =>
+    isDateInRange(pull.mergedAt, range),
   );
-
-  onProgress({
-    phase: "workstreams",
-    message: "関連 Issue を解決しています",
-    completed: 0,
-    total: processedPulls.length,
-  });
-  let resolvedPullCount = 0;
-  const resolvedPulls = await mapWithConcurrency(
-    processedPulls,
-    3,
-    async (processed) => {
-      const issue = await resolver.resolve({
-        repository: processed.score.repository,
-        pull: processed.pull,
-      });
-      resolvedPullCount += 1;
-      onProgress({
-        phase: "workstreams",
-        message: "関連 Issue を解決しています",
-        completed: resolvedPullCount,
-        total: processedPulls.length,
-      });
-      return { processed, issue };
-    },
-  );
-  const groups = groupWorkstreams(resolvedPulls);
-
-  onProgress({
-    phase: "workstreams",
-    message: "ワークストリームの点数を計算しています",
-    completed: 0,
-    total: groups.length,
-  });
-  let calculatedWorkstreamCount = 0;
-  const workstreams = await mapWithConcurrency(groups, 3, async (group) => {
-    const workstream = await calculateWorkstream(group, resolver, scope.range);
-    calculatedWorkstreamCount += 1;
-    onProgress({
-      phase: "workstreams",
-      message: "ワークストリームの点数を計算しています",
-      completed: calculatedWorkstreamCount,
-      total: groups.length,
-    });
-    return workstream;
-  });
-  workstreams.sort(
-    (left, right) =>
-      right.importance - left.importance || left.key.localeCompare(right.key),
-  );
+  const groups = groupWorkstreams(pulls, issueByKey);
+  const workstreams = groups
+    .map((group) => calculateWorkstream(group, range))
+    .sort(
+      (left, right) =>
+        right.importance - left.importance ||
+        left.key.localeCompare(right.key),
+    );
 
   const linkedIssueKeys = new Set(
     groups
       .map((group) => group.issue?.key)
       .filter((key): key is string => key != null),
   );
-  const standaloneIssues = await calculateStandaloneIssues(
-    client,
-    resolver,
-    scope,
-    linkedIssueKeys,
-    onProgress,
-  );
-  standaloneIssues.sort(
-    (left, right) =>
-      right.score - left.score || left.key.localeCompare(right.key),
-  );
+  const standaloneIssues = dataset.issues
+    .map((issue) =>
+      calculateStandaloneIssue(issue, range, linkedIssueKeys),
+    )
+    .filter((issue): issue is StandaloneIssueScore => issue != null)
+    .sort(
+      (left, right) =>
+        right.score - left.score || left.key.localeCompare(right.key),
+    );
 
   const standaloneAllocations = standaloneIssues.flatMap(
     (issue) => issue.allocations,
   );
-  const contributors = buildContributors(workstreams, standaloneAllocations);
-
-  onProgress({
-    phase: "complete",
-    message: "計算が完了しました",
-    completed: 1,
-    total: 1,
-  });
-
   return {
-    scope,
-    calculatedAt: new Date().toISOString(),
-    contributors,
+    range,
+    contributors: buildContributors(workstreams, standaloneAllocations),
     workstreams,
     standaloneIssues,
-    requestCount: client.getRequestCount(),
-    rateLimit: client.getRateLimit(),
-    notices: standaloneNotices,
   };
 }
 
-async function processPull(
-  client: GitHubClient,
-  target: PullTarget,
-): Promise<ProcessedPull> {
-  const pull = await client.getPull(target.repository, target.number);
-  const mergedAt = pull.merged_at;
-  assertNonNullable(
-    mergedAt,
-    target.repository +
-      "#" +
-      target.number +
-      " はマージ済み検索結果ですが merged_at がありません。",
-  );
-  const pullAuthor = pull.user;
-  assertNonNullable(
-    pullAuthor,
-    target.repository +
-      "#" +
-      target.number +
-      " の作者アカウントを取得できません。",
-  );
-
-  const [rawFiles, reviews, reviewComments, commits] = await Promise.all([
-    client.getPullFiles(
-      target.repository,
-      target.number,
-      pull.changed_files,
-    ),
-    client.getPullReviews(target.repository, target.number),
-    client.getReviewComments(target.repository, target.number),
-    client.getPullCommits(target.repository, target.number),
-  ]);
-
-  const files = rawFiles.map(calculateFileScore);
-  const effectiveLines = sum(files.map((file) => file.effectiveLines));
-  const nonGeneratedFiles = files.filter(
-    (file) => file.generated === false,
-  ).length;
-  const coauthors = extractCoauthors(commits, pullAuthor.login);
-  const body = pull.body ?? "";
-  const conventionalBonus = calculateConventionalBonus(
-    pull.title,
-    body,
-    pull.labels.map((label) => label.name),
-  );
-
-  return {
-    score: {
-      key: target.repository.toLowerCase() + "#" + target.number,
-      repository: target.repository,
-      number: target.number,
-      title: pull.title,
-      url: pull.html_url,
-      author: toActor(pullAuthor),
-      coauthors,
-      files,
-      effectiveLines,
-      nonGeneratedFiles,
-      mass: calculatePullMass(effectiveLines, nonGeneratedFiles),
-      conventionalBonus,
-    },
-    pull,
-    reviews,
-    reviewComments,
-    authorIsHuman: isHumanUser(pullAuthor),
-  };
-}
-
-function extractCoauthors(
-  commits: GithubPullCommit[],
-  pullAuthorLogin: string,
-): Actor[] {
-  const actors = new Map<string, Actor>();
-  for (const commit of commits) {
-    if (commit.author != null && isHumanUser(commit.author)) {
-      addCoauthor(actors, toActor(commit.author), pullAuthorLogin);
-    }
-    for (const match of commit.commit.message.matchAll(
-      /^Co-authored-by:\s*[^<\n]+<(?:(?:\d+)\+)?([A-Za-z0-9-]+)@users\.noreply\.github\.com>\s*$/gim,
-    )) {
-      const login = match[1];
-      assertNonNullable(login, "共同作者の GitHub ログインを取得できません。");
-      if (isBotLogin(login) === false) {
-        addCoauthor(actors, actorFromLogin(login), pullAuthorLogin);
-      }
-    }
-  }
-  return [...actors.values()].sort((left, right) =>
-    left.login.localeCompare(right.login),
-  );
-}
-
-function addCoauthor(
-  actors: Map<string, Actor>,
-  actor: Actor,
-  pullAuthorLogin: string,
-): void {
-  if (actor.login.toLowerCase() === pullAuthorLogin.toLowerCase()) {
-    return;
-  }
-  actors.set(actor.login.toLowerCase(), actor);
-}
-
-function groupWorkstreams(resolvedPulls: ResolvedPull[]): WorkstreamGroup[] {
+function groupWorkstreams(
+  pulls: PreparedPull[],
+  issueByKey: Map<string, PreparedIssue>,
+): WorkstreamGroup[] {
   const groups = new Map<string, WorkstreamGroup>();
-  for (const resolved of resolvedPulls) {
-    const key =
-      resolved.issue?.key ?? "pr:" + resolved.processed.score.key.toLowerCase();
+  for (const pull of pulls) {
+    const key = pull.issueKey ?? "pr:" + pull.key;
     const current = groups.get(key);
-    if (current == null) {
-      groups.set(key, {
-        key,
-        issue: resolved.issue,
-        pulls: [resolved.processed],
-      });
-    } else {
-      current.pulls.push(resolved.processed);
+    if (current != null) {
+      current.pulls.push(pull);
+      continue;
     }
+
+    if (pull.issueKey == null) {
+      groups.set(key, { key, pulls: [pull] });
+      continue;
+    }
+    const issue = issueByKey.get(pull.issueKey);
+    assertNonNullable(
+      issue,
+      pull.key + " の関連 Issue が事前取得データにありません。",
+    );
+    groups.set(key, { key, issue, pulls: [pull] });
   }
   return [...groups.values()];
 }
 
-async function calculateWorkstream(
+function calculateWorkstream(
   group: WorkstreamGroup,
-  resolver: WorkstreamResolver,
   range: DateRange,
-): Promise<WorkstreamScore> {
-  const pulls = group.pulls.map((processed) => processed.score);
-  const effectiveLines = sum(pulls.map((pull) => pull.effectiveLines));
+): WorkstreamScore {
+  const effectiveLines = sum(
+    group.pulls.map((pull) => pull.effectiveLines),
+  );
   const nonGeneratedFiles = sum(
-    pulls.map((pull) => pull.nonGeneratedFiles),
+    group.pulls.map((pull) => pull.nonGeneratedFiles),
   );
   const repositoryCount = new Set(
-    pulls.map((pull) => pull.repository.toLowerCase()),
+    group.pulls.map((pull) => pull.repository.toLowerCase()),
   ).size;
   const conventionalBonus = Math.max(
-    ...pulls.map((pull) => pull.conventionalBonus),
+    ...group.pulls.map((pull) => pull.conventionalBonus),
   );
   const importance = calculateImportance({
     effectiveLines,
@@ -415,45 +145,38 @@ async function calculateWorkstream(
     repositoryCount,
     conventionalBonus,
   });
-  const issueReference = toIssueReference(group.issue);
-  const title = issueReference?.title ?? pulls[0]?.title;
-  const url = issueReference?.url ?? pulls[0]?.url;
-  assertNonNullable(title, "ワークストリームのタイトルがありません。");
-  assertNonNullable(url, "ワークストリームの URL がありません。");
-
+  const firstPull = group.pulls[0];
+  assertNonNullable(firstPull, "ワークストリームに PR がありません。");
+  const title = group.issue?.title ?? firstPull.title;
+  const source = createSourceReference(group.issue, firstPull);
+  const sourceTitle = createSourceTitle(group.issue, firstPull);
   const implementationAllocations = allocateImplementation(
     group,
     importance,
-    title,
-    url,
+    source,
+    sourceTitle,
   );
   const reviewAllocations = allocateReviews(
     group,
     importance,
     range,
-    title,
-    url,
+    source,
+    sourceTitle,
   );
-  const issueAllocations = await allocateLinkedIssue(
+  const issueAllocations = allocateLinkedIssue(
     group,
-    resolver,
     importance,
     range,
-    title,
-    url,
+    source,
+    sourceTitle,
   );
-  const allocations = [
-    ...implementationAllocations,
-    ...reviewAllocations,
-    ...issueAllocations,
-  ];
 
   return {
     key: group.key,
     title,
-    url,
-    issue: issueReference,
-    pulls,
+    source,
+    ...(group.issue == null ? {} : { issue: toIssueReference(group.issue) }),
+    pulls: group.pulls,
     effectiveLines,
     nonGeneratedFiles,
     repositoryCount,
@@ -468,53 +191,59 @@ async function calculateWorkstream(
     issuePoints: sum(
       issueAllocations.map((allocation) => allocation.points),
     ),
-    allocations,
+    allocations: [
+      ...implementationAllocations,
+      ...reviewAllocations,
+      ...issueAllocations,
+    ],
   };
 }
 
 function allocateImplementation(
   group: WorkstreamGroup,
   importance: number,
+  source: SourceReference,
   sourceTitle: string,
-  sourceUrl: string,
 ): ScoreAllocation[] {
-  const totalMass = sum(group.pulls.map((pull) => pull.score.mass));
+  const totalMass = sum(group.pulls.map((pull) => pull.mass));
+  if (totalMass <= 0) {
+    throw new Error("ワークストリームの実装質量が正の値ではありません。");
+  }
+
   const allocations: ScoreAllocation[] = [];
-  for (const processed of group.pulls) {
-    const pullPool = 0.65 * importance * (processed.score.mass / totalMass);
+  for (const pull of group.pulls) {
+    const pullPool = 0.65 * importance * (pull.mass / totalMass);
     const reason =
-      processed.score.repository +
+      pull.repository +
       "#" +
-      processed.score.number +
+      pull.number +
       " の実装質量 " +
-      processed.score.mass.toFixed(2) +
+      pull.mass.toFixed(2) +
       " による配分";
-    if (processed.authorIsHuman) {
-      const authorRatio = processed.score.coauthors.length > 0 ? 0.7 : 1;
+    if (pull.authorIsHuman) {
+      const authorRatio = pull.coauthors.length > 0 ? 0.7 : 1;
       allocations.push(
         createAllocation(
-          processed.score.author,
+          pull.author,
           "implementation",
           pullPool * authorRatio,
-          group.key,
+          source,
           sourceTitle,
-          sourceUrl,
           reason,
         ),
       );
     }
 
-    if (processed.score.coauthors.length > 0) {
+    if (pull.coauthors.length > 0) {
       const coauthorPool = pullPool * 0.3;
-      for (const coauthor of processed.score.coauthors) {
+      for (const coauthor of pull.coauthors) {
         allocations.push(
           createAllocation(
             coauthor,
             "implementation",
-            coauthorPool / processed.score.coauthors.length,
-            group.key,
+            coauthorPool / pull.coauthors.length,
+            source,
             sourceTitle,
-            sourceUrl,
             reason + "、共同作者枠",
           ),
         );
@@ -528,44 +257,25 @@ function allocateReviews(
   group: WorkstreamGroup,
   importance: number,
   range: DateRange,
+  source: SourceReference,
   sourceTitle: string,
-  sourceUrl: string,
 ): ScoreAllocation[] {
   const activities = new Map<string, ReviewActivity>();
-  for (const processed of group.pulls) {
-    const authorLogin = processed.score.author.login.toLowerCase();
-    for (const review of processed.reviews) {
-      if (
-        review.user == null ||
-        isHumanUser(review.user) === false ||
-        review.user.login.toLowerCase() === authorLogin ||
-        review.submitted_at == null ||
-        isDateInRange(review.submitted_at, range) === false ||
-        acceptedReviewStates.has(review.state.toUpperCase()) === false
-      ) {
+  for (const pull of group.pulls) {
+    for (const review of pull.reviews) {
+      if (isDateInRange(review.submittedAt, range) === false) {
         continue;
       }
-      const activity = getReviewActivity(activities, review.user);
-      if (
-        review.body != null &&
-        isSubstantiveReviewText(review.body)
-      ) {
+      const activity = getReviewActivity(activities, review.actor);
+      if (review.hasSubstantiveSummary) {
         activity.hasSummary = true;
       }
     }
-
-    for (const comment of processed.reviewComments) {
-      if (
-        comment.user == null ||
-        isHumanUser(comment.user) === false ||
-        comment.user.login.toLowerCase() === authorLogin ||
-        isDateInRange(comment.created_at, range) === false ||
-        comment.in_reply_to_id != null ||
-        isSubstantiveReviewText(comment.body) === false
-      ) {
+    for (const thread of pull.reviewThreads) {
+      if (isDateInRange(thread.createdAt, range) === false) {
         continue;
       }
-      const activity = getReviewActivity(activities, comment.user);
+      const activity = getReviewActivity(activities, thread.actor);
       activity.threadCount += 1;
     }
   }
@@ -581,37 +291,30 @@ function allocateReviews(
   if (totalWeight === 0) {
     return [];
   }
-  const reviewPool =
-    0.2 * importance * Math.min(1, totalWeight / 5);
+  const reviewPool = 0.2 * importance * Math.min(1, totalWeight / 5);
   return weights.map(({ activity, value }) =>
     createAllocation(
       activity.actor,
       "review",
       reviewPool * (value / totalWeight),
-      group.key,
+      source,
       sourceTitle,
-      sourceUrl,
       "レビュー重み V=" + value,
     ),
   );
 }
 
-async function allocateLinkedIssue(
+function allocateLinkedIssue(
   group: WorkstreamGroup,
-  resolver: WorkstreamResolver,
   importance: number,
   range: DateRange,
+  source: SourceReference,
   sourceTitle: string,
-  sourceUrl: string,
-): Promise<ScoreAllocation[]> {
+): ScoreAllocation[] {
   if (group.issue == null) {
     return [];
   }
-  const comments = await resolver.getIssueComments(
-    group.issue.repository,
-    group.issue.issue.number,
-  );
-  const activity = analyzeIssueActivity(group.issue.issue, comments, range);
+  const activity = analyzeIssueActivity(group.issue, range);
   const totalWeight = sum(
     activity.weightedActors.map((participant) => participant.weight),
   );
@@ -621,109 +324,34 @@ async function allocateLinkedIssue(
   return allocateIssueActivity(
     activity,
     0.15 * importance,
-    group.key,
+    source,
     sourceTitle,
-    sourceUrl,
   );
 }
 
-async function calculateStandaloneIssues(
-  client: GitHubClient,
-  resolver: WorkstreamResolver,
-  scope: CalculationScope,
-  linkedIssueKeys: Set<string>,
-  onProgress: (progress: CalculationProgress) => void,
-): Promise<StandaloneIssueScore[]> {
-  onProgress({
-    phase: "issues",
-    message: "期間内に活動があった Issue を検索しています",
-    completed: 0,
-    total: scope.repositories.length,
-  });
-  let searchedRepositories = 0;
-  const targetGroups = await mapWithConcurrency(
-    scope.repositories,
-    3,
-    async (repository) => {
-      const numbers = await client.searchIssueActivityNumbers(
-        repository,
-        scope.range,
-      );
-      searchedRepositories += 1;
-      onProgress({
-        phase: "issues",
-        message: "期間内に活動があった Issue を検索しています",
-        completed: searchedRepositories,
-        total: scope.repositories.length,
-      });
-      return numbers.map((number) => ({ repository, number }));
-    },
-  );
-  const targets = targetGroups.flat();
-
-  onProgress({
-    phase: "issues",
-    message: "独立 Issue の点数を計算しています",
-    completed: 0,
-    total: targets.length,
-  });
-  let completed = 0;
-  const scores = await mapWithConcurrency(targets, 3, async (target) => {
-    const result = await calculateStandaloneIssue(
-      client,
-      resolver,
-      target,
-      scope.range,
-      linkedIssueKeys,
-    );
-    completed += 1;
-    onProgress({
-      phase: "issues",
-      message: "独立 Issue の点数を計算しています",
-      completed,
-      total: targets.length,
-    });
-    return result;
-  });
-  return scores.filter(
-    (score): score is StandaloneIssueScore => score != null,
-  );
-}
-
-async function calculateStandaloneIssue(
-  client: GitHubClient,
-  resolver: WorkstreamResolver,
-  target: PullTarget,
+function calculateStandaloneIssue(
+  issue: PreparedIssue,
   range: DateRange,
   linkedIssueKeys: Set<string>,
-): Promise<StandaloneIssueScore | undefined> {
-  const issue = await resolver.getIssue(target.repository, target.number);
-  const key = target.repository.toLowerCase() + "#" + target.number;
-  if (issue.pull_request != null || linkedIssueKeys.has(key)) {
+): StandaloneIssueScore | undefined {
+  if (issue.activityCandidate === false || linkedIssueKeys.has(issue.key)) {
     return undefined;
   }
-  const labelNames = issue.labels.map((label) => label.name.toLowerCase());
   if (
-    labelNames.some(
-      (label) => label === "invalid" || label === "spam",
-    )
+    issue.labels.some((label) => {
+      const normalized = label.toLowerCase();
+      return normalized === "invalid" || normalized === "spam";
+    })
   ) {
     return undefined;
   }
 
-  const comments = await client.getIssueComments(
-    target.repository,
-    target.number,
-  );
-  const activity = analyzeIssueActivity(issue, comments, range);
+  const activity = analyzeIssueActivity(issue, range);
   if (activity.hasActivityInRange === false) {
     return undefined;
   }
-
   const statusBonus = calculateIssueStatusBonus(issue, activity, range);
-  const openIssueIsEligible =
-    isIssueOpenAtRangeEnd(issue, range) === false || statusBonus > 0;
-  if (openIssueIsEligible === false) {
+  if (isIssueOpenAtRangeEnd(issue, range) && statusBonus === 0) {
     return undefined;
   }
   const score = calculateStandaloneIssueScore(
@@ -738,83 +366,67 @@ async function calculateStandaloneIssue(
   if (score === 0 || totalWeight === 0) {
     return undefined;
   }
-  const sourceTitle =
-    target.repository + "#" + target.number + " " + issue.title;
-  const allocations = allocateIssueActivity(
-    activity,
-    score,
-    key,
-    sourceTitle,
-    issue.html_url,
-  );
-
+  const source: SourceReference = { type: "issue", key: issue.key };
+  const sourceTitle = createIssueTitle(issue);
   return {
-    key,
-    repository: target.repository,
-    number: target.number,
+    key: issue.key,
+    repository: issue.repository,
+    number: issue.number,
     title: issue.title,
-    url: issue.html_url,
     statusBonus,
     evidenceCount: activity.evidenceKinds.size,
     substantiveCommentCount: activity.substantiveCommentCount,
     participantCount: activity.participantCount,
     score,
-    allocations,
+    allocations: allocateIssueActivity(
+      activity,
+      score,
+      source,
+      sourceTitle,
+    ),
   };
 }
 
 function analyzeIssueActivity(
-  issue: GithubIssue,
-  comments: GithubIssueComment[],
+  issue: PreparedIssue,
   range: DateRange,
 ): IssueActivity {
   const weightedActors = new Map<string, WeightedActor>();
   const evidenceKinds = new Set<EvidenceKind>();
-  const body = issue.body ?? "";
-  const createdInRange = isDateInRange(issue.created_at, range);
+  const createdInRange = isDateInRange(issue.createdAt, range);
   if (createdInRange) {
-    const bodyEvidence = detectEvidenceKinds(body);
-    addEvidenceKinds(evidenceKinds, bodyEvidence);
-    if (issue.user != null && isHumanUser(issue.user)) {
+    addEvidenceKinds(evidenceKinds, issue.bodyEvidenceKinds);
+    if (issue.author != null && issue.authorIsHuman) {
       addIssueWeight(
         weightedActors,
-        toActor(issue.user),
-        2 + Math.min(bodyEvidence.length, 4),
+        issue.author,
+        2 + Math.min(issue.bodyEvidenceKinds.length, 4),
         true,
       );
     }
   }
 
-  const issueAuthorLogin = issue.user?.login.toLowerCase();
+  const issueAuthorLogin = issue.author?.login.toLowerCase();
   const commentCounts = new Map<string, number>();
   const participants = new Set<string>();
   let substantiveCommentCount = 0;
   let hasCommentInRange = false;
-  const sortedComments = [...comments].sort((left, right) =>
-    left.created_at.localeCompare(right.created_at),
-  );
 
-  for (const comment of sortedComments) {
-    if (isDateInRange(comment.created_at, range) === false) {
+  for (const comment of issue.comments) {
+    if (isDateInRange(comment.createdAt, range) === false) {
       continue;
     }
     hasCommentInRange = true;
-    if (
-      comment.user == null ||
-      isHumanUser(comment.user) === false ||
-      isSubstantiveIssueText(comment.body) === false
-    ) {
+    if (comment.actor == null || comment.substantive === false) {
       continue;
     }
 
     substantiveCommentCount += 1;
-    const loginKey = comment.user.login.toLowerCase();
+    const loginKey = comment.actor.login.toLowerCase();
     if (loginKey !== issueAuthorLogin) {
       participants.add(loginKey);
     }
-    const commentEvidence = detectEvidenceKinds(comment.body);
-    addEvidenceKinds(evidenceKinds, commentEvidence);
-
+    addEvidenceKinds(evidenceKinds, comment.evidenceKinds);
     const previousCount = commentCounts.get(loginKey) ?? 0;
     commentCounts.set(loginKey, previousCount + 1);
     if (previousCount >= 3) {
@@ -822,7 +434,7 @@ function analyzeIssueActivity(
     }
     const decay = [1, 0.5, 0.25][previousCount];
     assertNonNullable(decay, "Issue コメントの逓減係数がありません。");
-    const evidenceBonus = commentEvidence.some(
+    const evidenceBonus = comment.evidenceKinds.some(
       (kind) =>
         kind === "codeOrLog" ||
         kind === "attachment" ||
@@ -832,14 +444,14 @@ function analyzeIssueActivity(
       : 0;
     addIssueWeight(
       weightedActors,
-      toActor(comment.user),
+      comment.actor,
       (1 + evidenceBonus) * decay,
       false,
     );
   }
 
   const closedInRange =
-    issue.closed_at != null && isDateInRange(issue.closed_at, range);
+    issue.closedAt != null && isDateInRange(issue.closedAt, range);
   return {
     weightedActors: [...weightedActors.values()],
     evidenceKinds,
@@ -851,22 +463,22 @@ function analyzeIssueActivity(
 }
 
 function calculateIssueStatusBonus(
-  issue: GithubIssue,
+  issue: PreparedIssue,
   activity: IssueActivity,
   range: DateRange,
 ): number {
   const closedInRange =
-    issue.closed_at != null && isDateInRange(issue.closed_at, range);
+    issue.closedAt != null && isDateInRange(issue.closedAt, range);
   if (
     issue.state === "closed" &&
-    issue.state_reason === "completed" &&
+    issue.stateReason === "completed" &&
     closedInRange
   ) {
     return 2;
   }
   if (
     issue.state === "closed" &&
-    issue.state_reason === "not_planned" &&
+    issue.stateReason === "not_planned" &&
     closedInRange &&
     activity.evidenceKinds.size > 0
   ) {
@@ -891,16 +503,16 @@ function calculateIssueStatusBonus(
 }
 
 function isIssueOpenAtRangeEnd(
-  issue: GithubIssue,
+  issue: PreparedIssue,
   range: DateRange,
 ): boolean {
   if (issue.state === "open") {
     return true;
   }
-  const closedAt = issue.closed_at;
+  const closedAt = issue.closedAt;
   assertNonNullable(
     closedAt,
-    issue.html_url + " は Close 済みですが closed_at がありません。",
+    issue.key + " は Close 済みですが closedAt がありません。",
   );
   return closedAt.slice(0, 10) > range.end;
 }
@@ -908,9 +520,8 @@ function isIssueOpenAtRangeEnd(
 function allocateIssueActivity(
   activity: IssueActivity,
   score: number,
-  sourceKey: string,
+  source: SourceReference,
   sourceTitle: string,
-  sourceUrl: string,
 ): ScoreAllocation[] {
   const totalWeight = sum(
     activity.weightedActors.map((participant) => participant.weight),
@@ -932,9 +543,8 @@ function allocateIssueActivity(
       participant.actor,
       "issue",
       score * (participant.weight / totalWeight),
-      sourceKey,
+      source,
       sourceTitle,
-      sourceUrl,
       reasons.join("、") + "、重み " + participant.weight.toFixed(2),
     );
   });
@@ -966,15 +576,15 @@ function addIssueWeight(
 
 function getReviewActivity(
   activities: Map<string, ReviewActivity>,
-  user: GithubUser,
+  actor: Actor,
 ): ReviewActivity {
-  const key = user.login.toLowerCase();
+  const key = actor.login.toLowerCase();
   const current = activities.get(key);
   if (current != null) {
     return current;
   }
   const activity: ReviewActivity = {
-    actor: toActor(user),
+    actor,
     threadCount: 0,
     hasSummary: false,
   };
@@ -1037,9 +647,9 @@ function buildContributor(
     implementationPoints,
     reviewPoints,
     issuePoints,
-    entries: allocations.map(toScoreEntry).sort(
-      (left, right) => right.points - left.points,
-    ),
+    entries: allocations
+      .map(toScoreEntry)
+      .sort((left, right) => right.points - left.points),
   };
 }
 
@@ -1047,25 +657,9 @@ function toScoreEntry(allocation: ScoreAllocation): ScoreEntry {
   return {
     kind: allocation.kind,
     points: allocation.points,
-    sourceKey: allocation.sourceKey,
+    source: allocation.source,
     sourceTitle: allocation.sourceTitle,
-    sourceUrl: allocation.sourceUrl,
     reason: allocation.reason,
-  };
-}
-
-function toIssueReference(
-  resolved: ResolvedIssue | undefined,
-): IssueReference | undefined {
-  if (resolved == null) {
-    return undefined;
-  }
-  return {
-    key: resolved.key,
-    repository: resolved.repository,
-    number: resolved.issue.number,
-    title: resolved.issue.title,
-    url: resolved.issue.html_url,
   };
 }
 
@@ -1073,49 +667,51 @@ function createAllocation(
   actor: Actor,
   kind: ScoreAllocation["kind"],
   points: number,
-  sourceKey: string,
+  source: SourceReference,
   sourceTitle: string,
-  sourceUrl: string,
   reason: string,
 ): ScoreAllocation {
   return {
     actor,
     kind,
     points,
-    sourceKey,
+    source,
     sourceTitle,
-    sourceUrl,
     reason,
   };
 }
 
-function toActor(user: GithubUser): Actor {
+function createSourceReference(
+  issue: PreparedIssue | undefined,
+  pull: PreparedPull,
+): SourceReference {
+  if (issue != null) {
+    return { type: "issue", key: issue.key };
+  }
+  return { type: "pull", key: pull.key };
+}
+
+function createSourceTitle(
+  issue: PreparedIssue | undefined,
+  pull: PreparedPull,
+): string {
+  if (issue != null) {
+    return createIssueTitle(issue);
+  }
+  return pull.repository + "#" + pull.number + " " + pull.title;
+}
+
+function createIssueTitle(issue: PreparedIssue): string {
+  return issue.repository + "#" + issue.number + " " + issue.title;
+}
+
+function toIssueReference(issue: PreparedIssue): IssueReference {
   return {
-    login: user.login,
-    avatarUrl: user.avatar_url,
-    profileUrl: user.html_url,
+    key: issue.key,
+    repository: issue.repository,
+    number: issue.number,
+    title: issue.title,
   };
-}
-
-function actorFromLogin(login: string): Actor {
-  return {
-    login,
-    avatarUrl: "https://github.com/" + login + ".png?size=96",
-    profileUrl: "https://github.com/" + login,
-  };
-}
-
-function isHumanUser(user: GithubUser): boolean {
-  return user.type === "User" && isBotLogin(user.login) === false;
-}
-
-function isBotLogin(login: string): boolean {
-  return /\[bot\]$|(?:^|[-_])bot$/i.test(login);
-}
-
-function isDateInRange(timestamp: string, range: DateRange): boolean {
-  const date = timestamp.slice(0, 10);
-  return date >= range.start && date <= range.end;
 }
 
 function addEvidenceKinds(
@@ -1127,32 +723,11 @@ function addEvidenceKinds(
   }
 }
 
-function sum(values: number[]): number {
-  return values.reduce((total, value) => total + value, 0);
+function isDateInRange(timestamp: string, range: DateRange): boolean {
+  const date = timestamp.slice(0, 10);
+  return date >= range.start && date <= range.end;
 }
 
-async function mapWithConcurrency<T, R>(
-  values: T[],
-  concurrency: number,
-  callback: (value: T) => Promise<R>,
-): Promise<R[]> {
-  if (concurrency <= 0) {
-    throw new Error("並列数は正の整数で指定してください。");
-  }
-  let nextIndex = 0;
-  const results: Array<{ index: number; value: R }> = [];
-  const workerCount = Math.min(concurrency, values.length);
-  const workers = Array.from({ length: workerCount }, async () => {
-    while (nextIndex < values.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      const value = values[index];
-      assertNonNullable(value, "並列処理の対象がありません。");
-      results.push({ index, value: await callback(value) });
-    }
-  });
-  await Promise.all(workers);
-  return results
-    .sort((left, right) => left.index - right.index)
-    .map((result) => result.value);
+function sum(values: number[]): number {
+  return values.reduce((total, value) => total + value, 0);
 }

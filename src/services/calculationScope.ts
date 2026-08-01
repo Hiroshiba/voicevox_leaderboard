@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { CalculationScope } from "../domain/model";
+import type { DateRange } from "../domain/model.ts";
 
 const dateSchema = z
   .string()
@@ -15,74 +15,41 @@ const dateSchema = z
     "実在する日付を指定してください。",
   );
 
-const calculationScopeSchema = z
+const dateRangeSchema = z
   .object({
-    organization: z
-      .string()
-      .trim()
-      .min(1, "Organization を入力してください。")
-      .regex(
-        /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/,
-        "Organization の形式が正しくありません。",
-      ),
-    repositories: z
-      .array(
-        z
-          .string()
-          .regex(
-            /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/,
-            "リポジトリ名は owner/name 形式で指定してください。",
-          ),
-      )
-      .min(1, "対象リポジトリを 1 件以上選択してください。"),
-    range: z.object({
-      start: dateSchema,
-      end: dateSchema,
-    }),
+    start: dateSchema,
+    end: dateSchema,
   })
-  .superRefine((scope, context) => {
-    if (scope.range.start > scope.range.end) {
+  .superRefine((range, context) => {
+    if (range.start > range.end) {
       context.addIssue({
         code: "custom",
-        path: ["range", "end"],
+        path: ["end"],
         message: "終了日は開始日以降にしてください。",
       });
     }
-    const expectedOwner = scope.organization.toLowerCase() + "/";
-    for (const repository of scope.repositories) {
-      if (repository.toLowerCase().startsWith(expectedOwner) === false) {
-        context.addIssue({
-          code: "custom",
-          path: ["repositories"],
-          message:
-            "対象リポジトリは指定した Organization 内から選択してください。",
-        });
-        break;
-      }
-    }
   });
 
-/** 画面入力を検証済みの計算対象へ変換する。 */
-export function parseCalculationScope(input: unknown): CalculationScope {
-  const parsed = calculationScopeSchema.safeParse(input);
-  if (!parsed.success) {
+/** 画面入力を取得済み期間内の日付範囲へ変換する。 */
+export function parseDateRange(
+  input: unknown,
+  availableRange: DateRange,
+): DateRange {
+  const parsed = dateRangeSchema.safeParse(input);
+  if (parsed.success === false) {
     throw new Error(parsed.error.issues.map((issue) => issue.message).join("\n"));
   }
-  return {
-    organization: parsed.data.organization,
-    repositories: uniqueRepositories(parsed.data.repositories),
-    range: parsed.data.range,
-  };
-}
-
-function uniqueRepositories(repositories: string[]): string[] {
-  const seen = new Set<string>();
-  return repositories.filter((repository) => {
-    const key = repository.toLowerCase();
-    if (seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
-    return true;
-  });
+  if (
+    parsed.data.start < availableRange.start ||
+    parsed.data.end > availableRange.end
+  ) {
+    throw new Error(
+      "対象期間は取得済みの " +
+        availableRange.start +
+        " から " +
+        availableRange.end +
+        " までで指定してください。",
+    );
+  }
+  return parsed.data;
 }

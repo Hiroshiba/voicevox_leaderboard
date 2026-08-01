@@ -2,6 +2,7 @@ node_modules
 dist
 coverage
 .playwright-mcp
+.cache
 .env
 .env.local
 .env.*.local

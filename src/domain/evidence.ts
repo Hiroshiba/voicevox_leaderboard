@@ -1,4 +1,4 @@
-import type { EvidenceKind } from "./model";
+import type { EvidenceKind } from "./model.ts";
 
 const evidencePatterns: ReadonlyArray<{
   kind: EvidenceKind;

@@ -133,13 +133,14 @@ function allocation(login: string, points: number): ScoreAllocation {
     actor: {
       login,
       avatarUrl: "https://github.com/" + login + ".png",
-      profileUrl: "https://github.com/" + login,
     },
     kind: "issue",
     points,
-    sourceKey: "VOICEVOX/voicevox#1",
+    source: {
+      type: "issue",
+      key: "voicevox/voicevox#1",
+    },
     sourceTitle: "Issue 1",
-    sourceUrl: "https://github.com/VOICEVOX/voicevox/issues/1",
     reason: "検証",
   };
 }

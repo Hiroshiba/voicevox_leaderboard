@@ -10,13 +10,13 @@ defineProps<{
     class="rounded-3xl bg-ink px-6 py-8 text-white sm:px-8"
   >
     <p class="mb-1 text-xs font-semibold tracking-[0.18em] text-emerald-300 uppercase">
-      Prototype methodology
+      Calculation methodology
     </p>
     <h2
       id="method-heading"
       class="font-display text-2xl font-semibold"
     >
-      この試算で行うこと
+      このリーダーボードで行うこと
     </h2>
 
     <div class="mt-6 grid gap-6 lg:grid-cols-3">
@@ -25,7 +25,7 @@ defineProps<{
           1. 成果をまとめる
         </p>
         <p class="mt-2 text-sm leading-7 text-white/75">
-          Closing keyword、関連 Issue セクション、関連 PR の順に主 Issue を探し、
+          事前取得時に Closing keyword、関連 Issue セクション、関連 PR の順に主 Issue を探し、
           同じ Issue を参照するマージ済み PR を一つのワークストリームにします。
         </p>
       </div>
@@ -61,7 +61,7 @@ defineProps<{
 
     <details class="mt-6 rounded-2xl border border-white/15 px-4 py-3">
       <summary class="cursor-pointer list-none text-sm font-semibold">
-        プロトタイプの判定規則と制約
+        判定規則と制約
         <span
           aria-hidden="true"
           class="ml-2 text-white/50"

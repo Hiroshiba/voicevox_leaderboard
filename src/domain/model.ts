@@ -13,23 +13,15 @@ export interface DateRange {
   end: string;
 }
 
-export interface CalculationScope {
-  organization: string;
-  repositories: string[];
-  range: DateRange;
-}
-
 export interface Actor {
   login: string;
   avatarUrl: string;
-  profileUrl: string;
 }
 
-export interface RepositoryOption {
-  name: string;
-  description: string;
-  archived: boolean;
+export interface RepositorySummary {
+  nameWithOwner: string;
   fork: boolean;
+  mirror: boolean;
 }
 
 export interface FileScore {
@@ -40,27 +32,92 @@ export interface FileScore {
   generated: boolean;
 }
 
-export interface PullScore {
+export interface PreparedReview {
+  actor: Actor;
+  submittedAt: string;
+  hasSubstantiveSummary: boolean;
+}
+
+export interface PreparedReviewThread {
+  actor: Actor;
+  createdAt: string;
+}
+
+export interface PreparedPull {
   key: string;
   repository: string;
   number: number;
   title: string;
-  url: string;
+  githubUrl: string;
+  mergedAt: string;
   author: Actor;
+  authorIsHuman: boolean;
   coauthors: Actor[];
   files: FileScore[];
   effectiveLines: number;
   nonGeneratedFiles: number;
   mass: number;
   conventionalBonus: number;
+  reviews: PreparedReview[];
+  reviewThreads: PreparedReviewThread[];
+  issueKey?: string | undefined;
+}
+
+export interface PreparedIssueComment {
+  actor?: Actor | undefined;
+  createdAt: string;
+  substantive: boolean;
+  evidenceKinds: EvidenceKind[];
+}
+
+export interface PreparedIssue {
+  key: string;
+  repository: string;
+  number: number;
+  title: string;
+  githubUrl: string;
+  author?: Actor | undefined;
+  authorIsHuman: boolean;
+  state: "open" | "closed";
+  stateReason?: string | undefined;
+  createdAt: string;
+  closedAt?: string | undefined;
+  labels: string[];
+  bodyEvidenceKinds: EvidenceKind[];
+  comments: PreparedIssueComment[];
+  activityCandidate: boolean;
+}
+
+export interface AcquisitionStats {
+  networkRequests: number;
+  cacheRevalidations: number;
+  notModifiedResponses: number;
+  remainingCoreRequests?: number | undefined;
+  remainingSearchRequests?: number | undefined;
+}
+
+export interface LeaderboardDataset {
+  schemaVersion: 1;
+  organization: "VOICEVOX";
+  generatedAt: string;
+  range: DateRange;
+  repositories: RepositorySummary[];
+  pulls: PreparedPull[];
+  issues: PreparedIssue[];
+  notices: string[];
+  acquisition: AcquisitionStats;
+}
+
+export interface SourceReference {
+  type: "pull" | "issue";
+  key: string;
 }
 
 export interface ScoreEntry {
   kind: ContributionKind;
   points: number;
-  sourceKey: string;
+  source: SourceReference;
   sourceTitle: string;
-  sourceUrl: string;
   reason: string;
 }
 
@@ -73,15 +130,14 @@ export interface IssueReference {
   repository: string;
   number: number;
   title: string;
-  url: string;
 }
 
 export interface WorkstreamScore {
   key: string;
   title: string;
-  url: string;
-  issue: IssueReference | undefined;
-  pulls: PullScore[];
+  source: SourceReference;
+  issue?: IssueReference | undefined;
+  pulls: PreparedPull[];
   effectiveLines: number;
   nonGeneratedFiles: number;
   repositoryCount: number;
@@ -98,7 +154,6 @@ export interface StandaloneIssueScore {
   repository: string;
   number: number;
   title: string;
-  url: string;
   statusBonus: number;
   evidenceCount: number;
   substantiveCommentCount: number;
@@ -116,26 +171,9 @@ export interface ContributorScore extends Actor {
   entries: ScoreEntry[];
 }
 
-export interface RateLimit {
-  limit: number;
-  remaining: number;
-  resetsAt: string;
-}
-
 export interface LeaderboardResult {
-  scope: CalculationScope;
-  calculatedAt: string;
+  range: DateRange;
   contributors: ContributorScore[];
   workstreams: WorkstreamScore[];
   standaloneIssues: StandaloneIssueScore[];
-  requestCount: number;
-  rateLimit: RateLimit | undefined;
-  notices: string[];
-}
-
-export interface CalculationProgress {
-  phase: "search" | "pulls" | "workstreams" | "issues" | "complete";
-  message: string;
-  completed: number;
-  total: number;
 }

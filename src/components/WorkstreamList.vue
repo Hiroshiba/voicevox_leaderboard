@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import type { LeaderboardResult } from "../domain/model";
+import type { LeaderboardResult } from "../domain/model.ts";
+import { routeHref, sourceHref } from "../services/routes.ts";
 
 defineProps<{
   result: LeaderboardResult;
@@ -39,9 +40,7 @@ function formatLines(lines: number): string {
         <summary class="cursor-pointer list-none p-5">
           <div class="flex items-start justify-between gap-4">
             <div class="min-w-0">
-              <span
-                class="rounded-full bg-accent-soft px-2.5 py-1 text-xs font-semibold text-accent-dark"
-              >
+              <span class="rounded-full bg-accent-soft px-2.5 py-1 text-xs font-semibold text-accent-dark">
                 {{ workstream.issue == null ? "独立 PR" : "関連 Issue" }}
               </span>
               <h3 class="mt-3 line-clamp-2 font-semibold leading-snug">
@@ -61,14 +60,21 @@ function formatLines(lines: number): string {
               </p>
               <span
                 aria-hidden="true"
-                class="text-muted group-open:rotate-180"
+                class="text-muted"
               >⌄</span>
             </div>
           </div>
         </summary>
 
         <div class="border-t border-line px-5 py-4">
-          <dl class="grid grid-cols-2 gap-x-4 gap-y-3 text-sm sm:grid-cols-4">
+          <a
+            :href="sourceHref(workstream.source, result.range)"
+            class="text-sm font-semibold text-accent hover:underline"
+          >
+            発生源の詳細を見る
+          </a>
+
+          <dl class="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 text-sm sm:grid-cols-4">
             <div>
               <dt class="text-xs text-muted">
                 有効変更行 E
@@ -137,12 +143,10 @@ function formatLines(lines: number): string {
               class="text-sm"
             >
               <a
-                :href="pull.url"
-                target="_blank"
-                rel="noreferrer"
+                :href="routeHref({ name: 'pull', key: pull.key }, result.range)"
                 class="font-medium hover:text-accent"
               >
-                {{ pull.repository }}#{{ pull.number }}
+                {{ pull.repository }}#{{ pull.number }} {{ pull.title }}
               </a>
               <span class="ml-2 text-xs text-muted">
                 E {{ formatLines(pull.effectiveLines) }} ・ F
@@ -165,13 +169,13 @@ function formatLines(lines: number): string {
         <a
           v-for="issue in result.standaloneIssues"
           :key="issue.key"
-          :href="issue.url"
-          target="_blank"
-          rel="noreferrer"
+          :href="routeHref({ name: 'issue', key: issue.key }, result.range)"
           class="grid gap-2 border-b border-line px-4 py-3 last:border-b-0 hover:bg-paper/60 sm:grid-cols-[minmax(0,1fr)_auto]"
         >
           <div class="min-w-0">
-            <p class="font-medium">{{ issue.repository }}#{{ issue.number }} {{ issue.title }}</p>
+            <p class="font-medium">
+              {{ issue.repository }}#{{ issue.number }} {{ issue.title }}
+            </p>
             <p class="mt-1 text-xs text-muted">
               状態 {{ issue.statusBonus }} ・ 証拠 {{ issue.evidenceCount }} 種 ・
               実質的コメント {{ issue.substantiveCommentCount }} 件 ・ 参加者

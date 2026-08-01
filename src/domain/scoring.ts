@@ -1,9 +1,9 @@
-import { UnreachableError } from "./errors";
+import { UnreachableError } from "./errors.ts";
 import type {
   FileScore,
   ScoreAllocation,
   WorkstreamScore,
-} from "./model";
+} from "./model.ts";
 
 export interface FileChange {
   filename: string;

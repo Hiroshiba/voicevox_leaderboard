@@ -1,0 +1,52 @@
+@import "tailwindcss";
+
+@theme {
+  --color-paper: #f4f1e8;
+  --color-surface: #fffcf5;
+  --color-ink: #162521;
+  --color-muted: #65716c;
+  --color-line: #d7ddd4;
+  --color-accent: #16815d;
+  --color-accent-dark: #0d5a40;
+  --color-accent-soft: #dff3e9;
+  --color-highlight: #ecb548;
+  --color-danger: #b33a3a;
+  --font-sans:
+    "BIZ UDPGothic", "Noto Sans JP", "Yu Gothic UI", "Yu Gothic",
+    sans-serif;
+  --font-display:
+    "Avenir Next", "BIZ UDPGothic", "Noto Sans JP", sans-serif;
+}
+
+:root {
+  color: var(--color-ink);
+  background: var(--color-paper);
+  font-family: var(--font-sans);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+summary:focus-visible,
+a:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--color-accent) 45%, transparent);
+  outline-offset: 2px;
+}
+
+summary::-webkit-details-marker {
+  display: none;
+}

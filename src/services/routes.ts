@@ -7,6 +7,9 @@ import type {
 
 export type AppRoute =
   | { name: "home" }
+  | { name: "pulls" }
+  | { name: "issues" }
+  | { name: "methodology" }
   | { name: "person"; login: string }
   | { name: "pull"; key: string }
   | { name: "issue"; key: string }
@@ -101,6 +104,15 @@ function parseRouteSegments(segments: string[]): AppRoute {
   if (segments.length === 0) {
     return { name: "home" };
   }
+  if (segments.length === 1 && segments[0] === "pulls") {
+    return { name: "pulls" };
+  }
+  if (segments.length === 1 && segments[0] === "issues") {
+    return { name: "issues" };
+  }
+  if (segments.length === 1 && segments[0] === "methodology") {
+    return { name: "methodology" };
+  }
   if (segments.length === 2 && segments[0] === "people") {
     const login = loginSchema.safeParse(segments[1]);
     return login.success
@@ -141,6 +153,12 @@ function routePath(route: AppRoute): string {
   switch (route.name) {
     case "home":
       return "/";
+    case "pulls":
+      return "/pulls";
+    case "issues":
+      return "/issues";
+    case "methodology":
+      return "/methodology";
     case "person":
       return "/people/" + encodeURIComponent(route.login);
     case "pull":

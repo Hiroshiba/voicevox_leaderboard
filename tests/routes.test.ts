@@ -31,6 +31,26 @@ describe("画面ルート", () => {
     );
   });
 
+  it("PR 一覧の URL を解釈する", () => {
+    expect(
+      parseAppLocation(
+        "/pulls?start=2026-07-01&end=2026-07-31",
+      ),
+    ).toEqual({
+      route: { name: "pulls" },
+      range,
+    });
+  });
+
+  it("Issue 一覧と計算式のリンクを作る", () => {
+    expect(routeHref({ name: "issues" }, range)).toBe(
+      "/issues?start=2026-07-01&end=2026-07-31",
+    );
+    expect(routeHref({ name: "methodology" }, range)).toBe(
+      "/methodology?start=2026-07-01&end=2026-07-31",
+    );
+  });
+
   it("発生源を GitHub ではなく内部詳細ページへリンクする", () => {
     expect(
       sourceHref(

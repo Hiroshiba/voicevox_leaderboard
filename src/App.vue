@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from "vue";
 import IssuePage from "./components/IssuePage.vue";
+import IssueListPage from "./components/IssueListPage.vue";
 import LeaderboardTable from "./components/LeaderboardTable.vue";
-import MethodologyPanel from "./components/MethodologyPanel.vue";
+import MethodologyPage from "./components/MethodologyPage.vue";
 import PersonPage from "./components/PersonPage.vue";
+import PullListPage from "./components/PullListPage.vue";
 import PullPage from "./components/PullPage.vue";
-import WorkstreamList from "./components/WorkstreamList.vue";
 import { parseLeaderboardDataset } from "./domain/dataset.ts";
 import type {
   DateRange,
@@ -392,6 +393,40 @@ function describeError(error: unknown): string {
         >
           VOICEVOX Leaderboard
         </a>
+        <nav
+          v-if="readyState != null"
+          aria-label="主要ページ"
+          class="order-3 flex w-full items-center gap-4 overflow-x-auto pt-1 text-xs font-semibold text-muted md:order-none md:w-auto md:pt-0"
+        >
+          <a
+            :href="routeHref({ name: 'home' }, readyState.result.range)"
+            :aria-current="appLocation.route.name === 'home' ? 'page' : undefined"
+            :class="appLocation.route.name === 'home' ? 'text-accent-dark' : 'hover:text-ink'"
+          >
+            リーダーボード
+          </a>
+          <a
+            :href="routeHref({ name: 'pulls' }, readyState.result.range)"
+            :aria-current="appLocation.route.name === 'pulls' || appLocation.route.name === 'pull' ? 'page' : undefined"
+            :class="appLocation.route.name === 'pulls' || appLocation.route.name === 'pull' ? 'text-accent-dark' : 'hover:text-ink'"
+          >
+            PR
+          </a>
+          <a
+            :href="routeHref({ name: 'issues' }, readyState.result.range)"
+            :aria-current="appLocation.route.name === 'issues' || appLocation.route.name === 'issue' ? 'page' : undefined"
+            :class="appLocation.route.name === 'issues' || appLocation.route.name === 'issue' ? 'text-accent-dark' : 'hover:text-ink'"
+          >
+            Issue
+          </a>
+          <a
+            :href="routeHref({ name: 'methodology' }, readyState.result.range)"
+            :aria-current="appLocation.route.name === 'methodology' ? 'page' : undefined"
+            :class="appLocation.route.name === 'methodology' ? 'text-accent-dark' : 'hover:text-ink'"
+          >
+            計算式
+          </a>
+        </nav>
         <div class="flex items-center gap-2">
           <span class="rounded-full border border-accent/30 bg-accent-soft px-3 py-1 text-xs font-semibold text-accent-dark">
             Prototype
@@ -533,57 +568,30 @@ function describeError(error: unknown): string {
     </main>
 
     <template v-else-if="readyState != null">
-      <main v-if="appLocation.route.name === 'home'">
-        <section class="border-b border-line">
-          <div class="mx-auto max-w-7xl px-5 py-12 sm:px-8 lg:py-16">
-            <div class="self-center">
-              <p class="text-xs font-semibold tracking-[0.2em] text-accent uppercase">
-                Precomputed GitHub data
-              </p>
-              <h1 class="mt-4 max-w-2xl font-display text-4xl leading-[1.15] font-semibold tracking-tight sm:text-5xl">
-                貢献の形が違っても、
-                <span class="text-accent-dark">一つの成果</span>として測る。
-              </h1>
-              <p class="mt-6 max-w-xl text-base leading-8 text-muted">
-                VOICEVOX の公開かつ非アーカイブな全リポジトリから、関連 Issue、実装、レビュー、調査を一つの点数へ変換します。
-                GitHub API の取得と本文解析は事前に完了しています。
-              </p>
-              <dl class="mt-8 grid max-w-xl grid-cols-3 divide-x divide-line border-y border-line py-4">
-                <div class="pr-4">
-                  <dt class="text-xs text-muted">
-                    リポジトリ
-                  </dt>
-                  <dd class="mt-1 font-display text-2xl font-semibold">
-                    {{ readyState.dataset.repositories.length }}
-                  </dd>
-                </div>
-                <div class="px-4">
-                  <dt class="text-xs text-muted">
-                    取得済み PR
-                  </dt>
-                  <dd class="mt-1 font-display text-2xl font-semibold">
-                    {{ readyState.dataset.pulls.length }}
-                  </dd>
-                </div>
-                <div class="pl-4">
-                  <dt class="text-xs text-muted">
-                    取得済み Issue
-                  </dt>
-                  <dd class="mt-1 font-display text-2xl font-semibold">
-                    {{ readyState.dataset.issues.length }}
-                  </dd>
-                </div>
-              </dl>
-            </div>
-          </div>
-        </section>
-
-        <div class="mx-auto max-w-7xl space-y-14 px-5 py-12 sm:px-8 sm:py-16">
-          <LeaderboardTable :result="readyState.result" />
-          <WorkstreamList :result="readyState.result" />
-          <MethodologyPanel :notices="readyState.dataset.notices" />
-        </div>
+      <main
+        v-if="appLocation.route.name === 'home'"
+        class="mx-auto max-w-7xl px-5 py-10 sm:px-8 sm:py-14"
+      >
+        <LeaderboardTable :result="readyState.result" />
       </main>
+
+      <PullListPage
+        v-else-if="appLocation.route.name === 'pulls'"
+        :pulls="readyState.dataset.pulls"
+        :range="readyState.result.range"
+      />
+
+      <IssueListPage
+        v-else-if="appLocation.route.name === 'issues'"
+        :issues="readyState.dataset.issues"
+        :range="readyState.result.range"
+      />
+
+      <MethodologyPage
+        v-else-if="appLocation.route.name === 'methodology'"
+        :notices="readyState.dataset.notices"
+        :range="readyState.result.range"
+      />
 
       <PersonPage
         v-else-if="appLocation.route.name === 'person' && currentContributor != null"

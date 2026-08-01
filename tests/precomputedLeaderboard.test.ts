@@ -110,6 +110,187 @@ describe("calculateLeaderboard", () => {
       calculateLeaderboard(dataset, dataset.range),
     );
   });
+
+  it("配点と未配分点からワークストリーム重要度を復元できる", () => {
+    const result = calculateLeaderboard(dataset, dataset.range);
+    const workstream = result.workstreams[0];
+    expect(workstream).toBeDefined();
+    if (workstream == null) {
+      throw new Error("検証対象のワークストリームがありません。");
+    }
+
+    const allocations = workstream.allocations.reduce(
+      (total, allocation) => total + allocation.points,
+      0,
+    );
+    const unallocated = workstream.unallocatedEntries.reduce(
+      (total, entry) => total + entry.points,
+      0,
+    );
+
+    expect(allocations + unallocated).toBeCloseTo(workstream.importance, 12);
+    expect(workstream.unallocatedPoints).toBeCloseTo(unallocated, 12);
+    expect(workstream.unallocatedEntries).toEqual([
+      expect.objectContaining({
+        kind: "review",
+        reason: expect.stringContaining("上限 5 に満たないため未配分"),
+      }),
+    ]);
+  });
+
+  it("配点を個別の PR と Issue 活動まで追跡できる", () => {
+    const result = calculateLeaderboard(dataset, dataset.range);
+    const workstream = result.workstreams[0];
+    expect(workstream).toBeDefined();
+    if (workstream == null) {
+      throw new Error("検証対象のワークストリームがありません。");
+    }
+
+    const implementationSources = workstream.allocations
+      .filter((allocation) => allocation.kind === "implementation")
+      .map((allocation) => allocation.source.key);
+    const issueReasons = workstream.allocations
+      .filter((allocation) => allocation.kind === "issue")
+      .map((allocation) => allocation.reason);
+    const traceIds = [
+      ...workstream.allocations.map((allocation) => allocation.id),
+      ...workstream.unallocatedEntries.map((entry) => entry.id),
+    ];
+
+    expect(implementationSources).toEqual([
+      "voicevox/voicevox#1",
+      "voicevox/voicevox#2",
+    ]);
+    expect(issueReasons).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Issue 作成"),
+        expect.stringContaining("Issue 本文の証拠要素"),
+        expect.stringContaining("実質的コメント"),
+      ]),
+    );
+    expect(new Set(traceIds).size).toBe(traceIds.length);
+  });
+
+  it("関連 Issue とレビューがない枠を未配分として残す", () => {
+    const independentPull: PreparedPull = {
+      ...pull(3, "2026-07-15T00:00:00Z"),
+      reviews: [],
+      reviewThreads: [],
+      issueKey: undefined,
+    };
+    const independentDataset: LeaderboardDataset = {
+      ...dataset,
+      pulls: [independentPull],
+      issues: [],
+    };
+
+    const result = calculateLeaderboard(independentDataset, dataset.range);
+    const workstream = result.workstreams[0];
+    expect(workstream).toBeDefined();
+    if (workstream == null) {
+      throw new Error("検証対象のワークストリームがありません。");
+    }
+
+    expect(workstream.unallocatedPoints).toBeCloseTo(
+      workstream.importance * 0.35,
+      12,
+    );
+    expect(workstream.unallocatedEntries).toEqual([
+      expect.objectContaining({
+        kind: "review",
+        reason: "配点対象の人間レビューがないため未配分",
+      }),
+      expect.objectContaining({
+        kind: "issue",
+        reason: "関連 Issue がないため未配分",
+      }),
+    ]);
+  });
+
+  it("Bot 作者へ渡らない実装枠を未配分として残す", () => {
+    const botPull: PreparedPull = {
+      ...pull(4, "2026-07-15T00:00:00Z"),
+      author: actor("dependabot[bot]"),
+      authorIsHuman: false,
+      reviews: [],
+      reviewThreads: [],
+      issueKey: undefined,
+    };
+    const botDataset: LeaderboardDataset = {
+      ...dataset,
+      pulls: [botPull],
+      issues: [],
+    };
+
+    const result = calculateLeaderboard(botDataset, dataset.range);
+    const workstream = result.workstreams[0];
+    expect(workstream).toBeDefined();
+    if (workstream == null) {
+      throw new Error("検証対象のワークストリームがありません。");
+    }
+
+    expect(result.contributors).toHaveLength(0);
+    expect(workstream.unallocatedPoints).toBeCloseTo(workstream.importance, 12);
+    expect(workstream.unallocatedEntries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "implementation",
+          reason: expect.stringContaining("Bot のため作者分を未配分"),
+        }),
+      ]),
+    );
+  });
+
+  it("レビューの加点を参加、総評、個別スレッドへ分ける", () => {
+    const reviewedPull: PreparedPull = {
+      ...pull(5, "2026-07-15T00:00:00Z"),
+      reviewThreads: [
+        {
+          actor: bob,
+          createdAt: "2026-07-13T00:00:00Z",
+        },
+        {
+          actor: bob,
+          createdAt: "2026-07-14T00:00:00Z",
+        },
+      ],
+      issueKey: undefined,
+    };
+    const reviewedDataset: LeaderboardDataset = {
+      ...dataset,
+      pulls: [reviewedPull],
+      issues: [],
+    };
+
+    const result = calculateLeaderboard(reviewedDataset, dataset.range);
+    const workstream = result.workstreams[0];
+    expect(workstream).toBeDefined();
+    if (workstream == null) {
+      throw new Error("検証対象のワークストリームがありません。");
+    }
+    const reviews = workstream.allocations.filter(
+      (allocation) => allocation.kind === "review",
+    );
+    const reviewLoss = workstream.unallocatedEntries.find(
+      (entry) => entry.kind === "review",
+    );
+
+    expect(reviews).toHaveLength(4);
+    expect(reviews.map((allocation) => allocation.reason)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("レビュー参加"),
+        expect.stringContaining("レビュー総評"),
+        expect.stringContaining("レビュースレッド 1 件目"),
+        expect.stringContaining("レビュースレッド 2 件目"),
+      ]),
+    );
+    expect(
+      reviews.every(
+        (allocation) => allocation.source.key === reviewedPull.key,
+      ),
+    ).toBe(true);
+    expect(reviewLoss?.points).toBeCloseTo(workstream.importance * 0.04, 12);
+  });
 });
 
 function pull(number: number, mergedAt: string): PreparedPull {

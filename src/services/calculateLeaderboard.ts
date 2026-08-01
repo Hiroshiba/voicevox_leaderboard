@@ -13,6 +13,7 @@ import type {
   ScoreEntry,
   SourceReference,
   StandaloneIssueScore,
+  UnallocatedScore,
   WorkstreamScore,
 } from "../domain/model.ts";
 import {
@@ -28,25 +29,41 @@ interface WorkstreamGroup {
   pulls: PreparedPull[];
 }
 
-interface WeightedActor {
+interface WeightedOrigin {
+  id: string;
   actor: Actor;
   weight: number;
-  createdIssue: boolean;
-  substantiveComments: number;
+  source: SourceReference;
+  sourceTitle: string;
+  reason: string;
 }
 
 interface IssueActivity {
-  weightedActors: WeightedActor[];
+  weightedOrigins: WeightedOrigin[];
   evidenceKinds: Set<EvidenceKind>;
   substantiveCommentCount: number;
   participantCount: number;
   hasActivityInRange: boolean;
 }
 
-interface ReviewActivity {
+interface ReviewEventBase {
+  id: string;
   actor: Actor;
-  threadCount: number;
-  hasSummary: boolean;
+  createdAt: string;
+  source: SourceReference;
+  sourceTitle: string;
+}
+
+type ReviewEvent =
+  | (ReviewEventBase & {
+      type: "submission";
+      hasSubstantiveSummary: boolean;
+    })
+  | (ReviewEventBase & { type: "thread" });
+
+interface AllocationResult {
+  allocations: ScoreAllocation[];
+  unallocatedEntries: UnallocatedScore[];
 }
 
 /** 事前取得データを指定期間のリーダーボードへ変換する。 */
@@ -150,25 +167,36 @@ function calculateWorkstream(
   const title = group.issue?.title ?? firstPull.title;
   const source = createSourceReference(group.issue, firstPull);
   const sourceTitle = createSourceTitle(group.issue, firstPull);
-  const implementationAllocations = allocateImplementation(
-    group,
-    importance,
-    source,
-    sourceTitle,
-  );
-  const reviewAllocations = allocateReviews(
+  const implementation = allocateImplementation(group, importance);
+  const review = allocateReviews(
     group,
     importance,
     range,
     source,
     sourceTitle,
   );
-  const issueAllocations = allocateLinkedIssue(
+  const issue = allocateLinkedIssue(
     group,
     importance,
     range,
     source,
     sourceTitle,
+  );
+  const allocations = [
+    ...implementation.allocations,
+    ...review.allocations,
+    ...issue.allocations,
+  ];
+  const unallocatedEntries = [
+    ...implementation.unallocatedEntries,
+    ...review.unallocatedEntries,
+    ...issue.unallocatedEntries,
+  ];
+  assertScoreConservation(
+    importance,
+    allocations,
+    unallocatedEntries,
+    group.key,
   );
 
   return {
@@ -183,36 +211,37 @@ function calculateWorkstream(
     conventionalBonus,
     importance,
     implementationPoints: sum(
-      implementationAllocations.map((allocation) => allocation.points),
+      implementation.allocations.map((allocation) => allocation.points),
     ),
     reviewPoints: sum(
-      reviewAllocations.map((allocation) => allocation.points),
+      review.allocations.map((allocation) => allocation.points),
     ),
     issuePoints: sum(
-      issueAllocations.map((allocation) => allocation.points),
+      issue.allocations.map((allocation) => allocation.points),
     ),
-    allocations: [
-      ...implementationAllocations,
-      ...reviewAllocations,
-      ...issueAllocations,
-    ],
+    allocations,
+    unallocatedPoints: sum(
+      unallocatedEntries.map((entry) => entry.points),
+    ),
+    unallocatedEntries,
   };
 }
 
 function allocateImplementation(
   group: WorkstreamGroup,
   importance: number,
-  source: SourceReference,
-  sourceTitle: string,
-): ScoreAllocation[] {
+): AllocationResult {
   const totalMass = sum(group.pulls.map((pull) => pull.mass));
   if (totalMass <= 0) {
     throw new Error("ワークストリームの実装質量が正の値ではありません。");
   }
 
   const allocations: ScoreAllocation[] = [];
+  const unallocatedEntries: UnallocatedScore[] = [];
   for (const pull of group.pulls) {
     const pullPool = 0.65 * importance * (pull.mass / totalMass);
+    const source = createPullSource(pull);
+    const sourceTitle = createPullTitle(pull);
     const reason =
       pull.repository +
       "#" +
@@ -220,16 +249,28 @@ function allocateImplementation(
       " の実装質量 " +
       pull.mass.toFixed(2) +
       " による配分";
+    const authorRatio = pull.coauthors.length > 0 ? 0.7 : 1;
     if (pull.authorIsHuman) {
-      const authorRatio = pull.coauthors.length > 0 ? 0.7 : 1;
       allocations.push(
         createAllocation(
+          pull.key + ":implementation:author",
           pull.author,
           "implementation",
           pullPool * authorRatio,
           source,
           sourceTitle,
           reason,
+        ),
+      );
+    } else {
+      unallocatedEntries.push(
+        createUnallocatedScore(
+          pull.key + ":implementation:author:unallocated",
+          "implementation",
+          pullPool * authorRatio,
+          source,
+          sourceTitle,
+          pull.author.login + " が Bot のため作者分を未配分",
         ),
       );
     }
@@ -239,6 +280,9 @@ function allocateImplementation(
       for (const coauthor of pull.coauthors) {
         allocations.push(
           createAllocation(
+            pull.key +
+              ":implementation:coauthor:" +
+              coauthor.login.toLowerCase(),
             coauthor,
             "implementation",
             coauthorPool / pull.coauthors.length,
@@ -250,7 +294,7 @@ function allocateImplementation(
       }
     }
   }
-  return allocations;
+  return { allocations, unallocatedEntries };
 }
 
 function allocateReviews(
@@ -259,49 +303,89 @@ function allocateReviews(
   range: DateRange,
   source: SourceReference,
   sourceTitle: string,
-): ScoreAllocation[] {
-  const activities = new Map<string, ReviewActivity>();
+): AllocationResult {
+  const events = new Map<string, ReviewEvent[]>();
   for (const pull of group.pulls) {
-    for (const review of pull.reviews) {
+    const pullSource = createPullSource(pull);
+    const pullTitle = createPullTitle(pull);
+    for (const [reviewIndex, review] of pull.reviews.entries()) {
       if (isDateInRange(review.submittedAt, range) === false) {
         continue;
       }
-      const activity = getReviewActivity(activities, review.actor);
-      if (review.hasSubstantiveSummary) {
-        activity.hasSummary = true;
-      }
+      addReviewEvent(events, {
+        id: pull.key + ":review:" + reviewIndex,
+        type: "submission",
+        actor: review.actor,
+        createdAt: review.submittedAt,
+        source: pullSource,
+        sourceTitle: pullTitle,
+        hasSubstantiveSummary: review.hasSubstantiveSummary,
+      });
     }
-    for (const thread of pull.reviewThreads) {
+    for (const [threadIndex, thread] of pull.reviewThreads.entries()) {
       if (isDateInRange(thread.createdAt, range) === false) {
         continue;
       }
-      const activity = getReviewActivity(activities, thread.actor);
-      activity.threadCount += 1;
+      addReviewEvent(events, {
+        id: pull.key + ":review-thread:" + threadIndex,
+        type: "thread",
+        actor: thread.actor,
+        createdAt: thread.createdAt,
+        source: pullSource,
+        sourceTitle: pullTitle,
+      });
     }
   }
 
-  const weights = [...activities.values()].map((activity) => ({
-    activity,
-    value:
-      1 +
-      Math.min(3, activity.threadCount) +
-      (activity.hasSummary ? 1 : 0),
-  }));
-  const totalWeight = sum(weights.map((weight) => weight.value));
+  const origins = createReviewOrigins(events);
+  const totalWeight = sum(origins.map((origin) => origin.weight));
+  const maximumPoints = 0.2 * importance;
   if (totalWeight === 0) {
-    return [];
+    return {
+      allocations: [],
+      unallocatedEntries: [
+        createUnallocatedScore(
+          group.key + ":review:unallocated",
+          "review",
+          maximumPoints,
+          source,
+          sourceTitle,
+          "配点対象の人間レビューがないため未配分",
+        ),
+      ],
+    };
   }
-  const reviewPool = 0.2 * importance * Math.min(1, totalWeight / 5);
-  return weights.map(({ activity, value }) =>
+  const allocatedPoints = maximumPoints * Math.min(1, totalWeight / 5);
+  const allocations = origins.map((origin) =>
     createAllocation(
-      activity.actor,
+      origin.id,
+      origin.actor,
       "review",
-      reviewPool * (value / totalWeight),
-      source,
-      sourceTitle,
-      "レビュー重み V=" + value,
+      allocatedPoints * (origin.weight / totalWeight),
+      origin.source,
+      origin.sourceTitle,
+      origin.reason,
     ),
   );
+  const unallocatedPoints = maximumPoints - allocatedPoints;
+  return {
+    allocations,
+    unallocatedEntries:
+      unallocatedPoints === 0
+        ? []
+        : [
+            createUnallocatedScore(
+              group.key + ":review:unallocated",
+              "review",
+              unallocatedPoints,
+              source,
+              sourceTitle,
+              "レビュー重み " +
+                totalWeight.toFixed(2) +
+                " が上限 5 に満たないため未配分",
+            ),
+          ],
+  };
 }
 
 function allocateLinkedIssue(
@@ -310,23 +394,46 @@ function allocateLinkedIssue(
   range: DateRange,
   source: SourceReference,
   sourceTitle: string,
-): ScoreAllocation[] {
+): AllocationResult {
+  const maximumPoints = 0.15 * importance;
   if (group.issue == null) {
-    return [];
+    return {
+      allocations: [],
+      unallocatedEntries: [
+        createUnallocatedScore(
+          group.key + ":issue:unallocated",
+          "issue",
+          maximumPoints,
+          source,
+          sourceTitle,
+          "関連 Issue がないため未配分",
+        ),
+      ],
+    };
   }
   const activity = analyzeIssueActivity(group.issue, range);
   const totalWeight = sum(
-    activity.weightedActors.map((participant) => participant.weight),
+    activity.weightedOrigins.map((origin) => origin.weight),
   );
   if (totalWeight === 0) {
-    return [];
+    return {
+      allocations: [],
+      unallocatedEntries: [
+        createUnallocatedScore(
+          group.key + ":issue:unallocated",
+          "issue",
+          maximumPoints,
+          source,
+          sourceTitle,
+          "期間内に配点対象の Issue 活動がないため未配分",
+        ),
+      ],
+    };
   }
-  return allocateIssueActivity(
-    activity,
-    0.15 * importance,
-    source,
-    sourceTitle,
-  );
+  return {
+    allocations: allocateIssueActivity(activity, maximumPoints),
+    unallocatedEntries: [],
+  };
 }
 
 function calculateStandaloneIssue(
@@ -361,13 +468,11 @@ function calculateStandaloneIssue(
     activity.participantCount,
   );
   const totalWeight = sum(
-    activity.weightedActors.map((participant) => participant.weight),
+    activity.weightedOrigins.map((origin) => origin.weight),
   );
   if (score === 0 || totalWeight === 0) {
     return undefined;
   }
-  const source: SourceReference = { type: "issue", key: issue.key };
-  const sourceTitle = createIssueTitle(issue);
   return {
     key: issue.key,
     repository: issue.repository,
@@ -378,12 +483,7 @@ function calculateStandaloneIssue(
     substantiveCommentCount: activity.substantiveCommentCount,
     participantCount: activity.participantCount,
     score,
-    allocations: allocateIssueActivity(
-      activity,
-      score,
-      source,
-      sourceTitle,
-    ),
+    allocations: allocateIssueActivity(activity, score),
   };
 }
 
@@ -391,18 +491,37 @@ function analyzeIssueActivity(
   issue: PreparedIssue,
   range: DateRange,
 ): IssueActivity {
-  const weightedActors = new Map<string, WeightedActor>();
+  const weightedOrigins: WeightedOrigin[] = [];
   const evidenceKinds = new Set<EvidenceKind>();
+  const source: SourceReference = { type: "issue", key: issue.key };
+  const sourceTitle = createIssueTitle(issue);
   const createdInRange = isDateInRange(issue.createdAt, range);
   if (createdInRange) {
     addEvidenceKinds(evidenceKinds, issue.bodyEvidenceKinds);
     if (issue.author != null && issue.authorIsHuman) {
-      addIssueWeight(
-        weightedActors,
-        issue.author,
-        2 + Math.min(issue.bodyEvidenceKinds.length, 4),
-        true,
-      );
+      weightedOrigins.push({
+        id: issue.key + ":issue:created",
+        actor: issue.author,
+        weight: 2,
+        source,
+        sourceTitle,
+        reason: "Issue 作成、重み 2.00",
+      });
+      for (const [evidenceIndex, kind] of issue.bodyEvidenceKinds
+        .slice(0, 4)
+        .entries()) {
+        weightedOrigins.push({
+          id: issue.key + ":issue:body-evidence:" + evidenceIndex,
+          actor: issue.author,
+          weight: 1,
+          source,
+          sourceTitle,
+          reason:
+            "Issue 本文の証拠要素「" +
+            evidenceKindLabel(kind) +
+            "」、重み 1.00",
+        });
+      }
     }
   }
 
@@ -412,7 +531,7 @@ function analyzeIssueActivity(
   let substantiveCommentCount = 0;
   let hasCommentInRange = false;
 
-  for (const comment of issue.comments) {
+  for (const [commentIndex, comment] of issue.comments.entries()) {
     if (isDateInRange(comment.createdAt, range) === false) {
       continue;
     }
@@ -442,18 +561,28 @@ function analyzeIssueActivity(
     )
       ? 1
       : 0;
-    addIssueWeight(
-      weightedActors,
-      comment.actor,
-      (1 + evidenceBonus) * decay,
-      false,
-    );
+    const weight = (1 + evidenceBonus) * decay;
+    weightedOrigins.push({
+      id: issue.key + ":issue:comment:" + commentIndex,
+      actor: comment.actor,
+      weight,
+      source,
+      sourceTitle,
+      reason:
+        "実質的コメント " +
+        (previousCount + 1) +
+        " 件目、" +
+        comment.createdAt +
+        (evidenceBonus === 0 ? "" : "、添付・ログ・測定結果あり") +
+        "、重み " +
+        weight.toFixed(2),
+    });
   }
 
   const closedInRange =
     issue.closedAt != null && isDateInRange(issue.closedAt, range);
   return {
-    weightedActors: [...weightedActors.values()],
+    weightedOrigins,
     evidenceKinds,
     substantiveCommentCount,
     participantCount: participants.size,
@@ -520,76 +649,101 @@ function isIssueOpenAtRangeEnd(
 function allocateIssueActivity(
   activity: IssueActivity,
   score: number,
-  source: SourceReference,
-  sourceTitle: string,
 ): ScoreAllocation[] {
   const totalWeight = sum(
-    activity.weightedActors.map((participant) => participant.weight),
+    activity.weightedOrigins.map((origin) => origin.weight),
   );
-  if (totalWeight === 0) {
-    return [];
+  if (totalWeight <= 0) {
+    throw new Error("Issue 活動の配点重みが正の値ではありません。");
   }
-  return activity.weightedActors.map((participant) => {
-    const reasons: string[] = [];
-    if (participant.createdIssue) {
-      reasons.push("Issue 作成");
-    }
-    if (participant.substantiveComments > 0) {
-      reasons.push(
-        "実質的コメント " + participant.substantiveComments + " 件",
-      );
-    }
-    return createAllocation(
-      participant.actor,
+  return activity.weightedOrigins.map((origin) =>
+    createAllocation(
+      origin.id,
+      origin.actor,
       "issue",
-      score * (participant.weight / totalWeight),
-      source,
-      sourceTitle,
-      reasons.join("、") + "、重み " + participant.weight.toFixed(2),
-    );
-  });
+      score * (origin.weight / totalWeight),
+      origin.source,
+      origin.sourceTitle,
+      origin.reason,
+    ),
+  );
 }
 
-function addIssueWeight(
-  participants: Map<string, WeightedActor>,
-  actor: Actor,
-  weight: number,
-  createdIssue: boolean,
+function addReviewEvent(
+  events: Map<string, ReviewEvent[]>,
+  event: ReviewEvent,
 ): void {
-  const key = actor.login.toLowerCase();
-  const current = participants.get(key);
+  const key = event.actor.login.toLowerCase();
+  const current = events.get(key);
   if (current == null) {
-    participants.set(key, {
-      actor,
-      weight,
-      createdIssue,
-      substantiveComments: createdIssue ? 0 : 1,
-    });
+    events.set(key, [event]);
     return;
   }
-  current.weight += weight;
-  current.createdIssue = current.createdIssue || createdIssue;
-  if (createdIssue === false) {
-    current.substantiveComments += 1;
-  }
+  current.push(event);
 }
 
-function getReviewActivity(
-  activities: Map<string, ReviewActivity>,
-  actor: Actor,
-): ReviewActivity {
-  const key = actor.login.toLowerCase();
-  const current = activities.get(key);
-  if (current != null) {
-    return current;
+function createReviewOrigins(
+  eventsByActor: Map<string, ReviewEvent[]>,
+): WeightedOrigin[] {
+  const origins: WeightedOrigin[] = [];
+  for (const events of eventsByActor.values()) {
+    events.sort(
+      (left, right) =>
+        left.createdAt.localeCompare(right.createdAt) ||
+        left.id.localeCompare(right.id),
+    );
+    const firstEvent = events[0];
+    assertNonNullable(firstEvent, "レビュー活動の発生源がありません。");
+    origins.push({
+      id: firstEvent.id + ":participation",
+      actor: firstEvent.actor,
+      weight: 1,
+      source: firstEvent.source,
+      sourceTitle: firstEvent.sourceTitle,
+      reason:
+        "ワークストリームのレビュー参加、最初の活動 " +
+        firstEvent.createdAt +
+        "、重み 1.00",
+    });
+
+    let hasSummary = false;
+    let threadCount = 0;
+    for (const event of events) {
+      if (
+        event.type === "submission" &&
+        event.hasSubstantiveSummary &&
+        hasSummary === false
+      ) {
+        origins.push({
+          id: event.id + ":summary",
+          actor: event.actor,
+          weight: 1,
+          source: event.source,
+          sourceTitle: event.sourceTitle,
+          reason:
+            "実質的なレビュー総評、" + event.createdAt + "、重み 1.00",
+        });
+        hasSummary = true;
+      }
+      if (event.type === "thread" && threadCount < 3) {
+        origins.push({
+          id: event.id,
+          actor: event.actor,
+          weight: 1,
+          source: event.source,
+          sourceTitle: event.sourceTitle,
+          reason:
+            "実質的なレビュースレッド " +
+            (threadCount + 1) +
+            " 件目、" +
+            event.createdAt +
+            "、重み 1.00",
+        });
+        threadCount += 1;
+      }
+    }
   }
-  const activity: ReviewActivity = {
-    actor,
-    threadCount: 0,
-    hasSummary: false,
-  };
-  activities.set(key, activity);
-  return activity;
+  return origins;
 }
 
 function buildContributors(
@@ -649,12 +803,16 @@ function buildContributor(
     issuePoints,
     entries: allocations
       .map(toScoreEntry)
-      .sort((left, right) => right.points - left.points),
+      .sort(
+        (left, right) =>
+          right.points - left.points || left.id.localeCompare(right.id),
+      ),
   };
 }
 
 function toScoreEntry(allocation: ScoreAllocation): ScoreEntry {
   return {
+    id: allocation.id,
     kind: allocation.kind,
     points: allocation.points,
     source: allocation.source,
@@ -664,6 +822,7 @@ function toScoreEntry(allocation: ScoreAllocation): ScoreEntry {
 }
 
 function createAllocation(
+  id: string,
   actor: Actor,
   kind: ScoreAllocation["kind"],
   points: number,
@@ -671,8 +830,33 @@ function createAllocation(
   sourceTitle: string,
   reason: string,
 ): ScoreAllocation {
+  if (points <= 0) {
+    throw new Error("人物への配点が正の値ではありません。");
+  }
   return {
+    id,
     actor,
+    kind,
+    points,
+    source,
+    sourceTitle,
+    reason,
+  };
+}
+
+function createUnallocatedScore(
+  id: string,
+  kind: UnallocatedScore["kind"],
+  points: number,
+  source: SourceReference,
+  sourceTitle: string,
+  reason: string,
+): UnallocatedScore {
+  if (points <= 0) {
+    throw new Error("未配分点が正の値ではありません。");
+  }
+  return {
+    id,
     kind,
     points,
     source,
@@ -705,6 +889,14 @@ function createIssueTitle(issue: PreparedIssue): string {
   return issue.repository + "#" + issue.number + " " + issue.title;
 }
 
+function createPullSource(pull: PreparedPull): SourceReference {
+  return { type: "pull", key: pull.key };
+}
+
+function createPullTitle(pull: PreparedPull): string {
+  return pull.repository + "#" + pull.number + " " + pull.title;
+}
+
 function toIssueReference(issue: PreparedIssue): IssueReference {
   return {
     key: issue.key,
@@ -720,6 +912,54 @@ function addEvidenceKinds(
 ): void {
   for (const kind of kinds) {
     target.add(kind);
+  }
+}
+
+function evidenceKindLabel(kind: EvidenceKind): string {
+  switch (kind) {
+    case "codeOrLog":
+      return "コード・ログ";
+    case "command":
+      return "コマンド";
+    case "attachment":
+      return "添付";
+    case "reference":
+      return "外部参照";
+    case "environment":
+      return "実行環境";
+    case "measurement":
+      return "測定値";
+    default:
+      throw new UnreachableError(kind);
+  }
+}
+
+function assertScoreConservation(
+  importance: number,
+  allocations: ScoreAllocation[],
+  unallocatedEntries: UnallocatedScore[],
+  workstreamKey: string,
+): void {
+  const traceIds = [
+    ...allocations.map((allocation) => allocation.id),
+    ...unallocatedEntries.map((entry) => entry.id),
+  ];
+  if (new Set(traceIds).size !== traceIds.length) {
+    throw new Error(workstreamKey + " の配点追跡 ID が重複しています。");
+  }
+  const accountedPoints = sum([
+    ...allocations.map((allocation) => allocation.points),
+    ...unallocatedEntries.map((entry) => entry.points),
+  ]);
+  const tolerance = Math.max(1, importance) * 1e-10;
+  if (Math.abs(importance - accountedPoints) > tolerance) {
+    throw new Error(
+      workstreamKey +
+        " の重要度と配点済み・未配分の合計が一致しません。重要度 " +
+        importance +
+        "、追跡済み " +
+        accountedPoints,
+    );
   }
 }
 

@@ -114,6 +114,7 @@ export interface SourceReference {
 }
 
 export interface ScoreEntry {
+  id: string;
   kind: ContributionKind;
   points: number;
   source: SourceReference;
@@ -124,6 +125,8 @@ export interface ScoreEntry {
 export interface ScoreAllocation extends ScoreEntry {
   actor: Actor;
 }
+
+export type UnallocatedScore = ScoreEntry;
 
 export interface IssueReference {
   key: string;
@@ -147,6 +150,8 @@ export interface WorkstreamScore {
   reviewPoints: number;
   issuePoints: number;
   allocations: ScoreAllocation[];
+  unallocatedPoints: number;
+  unallocatedEntries: UnallocatedScore[];
 }
 
 export interface StandaloneIssueScore {

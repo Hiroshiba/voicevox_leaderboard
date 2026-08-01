@@ -130,6 +130,7 @@ describe("totalAllocations", () => {
 
 function allocation(login: string, points: number): ScoreAllocation {
   return {
+    id: "allocation:" + login,
     actor: {
       login,
       avatarUrl: "https://github.com/" + login + ".png",

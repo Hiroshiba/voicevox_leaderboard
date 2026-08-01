@@ -497,6 +497,7 @@ function describeError(error: unknown): string {
         v-else-if="appLocation.route.name === 'person' && currentContributor != null"
         :contributor="currentContributor"
         :range="readyState.result.range"
+        :result="readyState.result"
       />
 
       <PullPage

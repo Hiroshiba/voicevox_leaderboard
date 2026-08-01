@@ -1,296 +1,66 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { assertNonNullable } from "../domain/errors.ts";
 import type {
-  ContributionKind,
   ContributorScore,
-  DateRange,
-  SourceReference,
+  LeaderboardResult,
 } from "../domain/model.ts";
-import { contributionKindLabel } from "../domain/scoring.ts";
-import { sourceHref } from "../services/routes.ts";
-
-interface SourceFlow {
-  id: string;
-  source: SourceReference;
-  title: string;
-  total: number;
-  kindPoints: Map<ContributionKind, number>;
-}
-
-interface DiagramNode {
-  id: string;
-  label: string;
-  description: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  color: string;
-  href?: string | undefined;
-}
-
-interface DiagramLink {
-  id: string;
-  path: string;
-  width: number;
-  color: string;
-  label: string;
-  href?: string | undefined;
-}
-
-interface DiagramLayout {
-  height: number;
-  links: DiagramLink[];
-  nodes: DiagramNode[];
-}
+import {
+  createSankeyDiagramLayout,
+  type SankeyDiagramLink,
+  type SankeyDiagramNode,
+} from "../services/sankeyDiagram.ts";
 
 const props = defineProps<{
   contributor: ContributorScore;
-  range: DateRange;
+  result: LeaderboardResult;
 }>();
 
-const kindOrder: ContributionKind[] = [
-  "implementation",
-  "review",
-  "issue",
-];
+const layout = computed(() =>
+  createSankeyDiagramLayout(props.result, props.contributor),
+);
 
-const layout = computed<DiagramLayout>(() => createLayout());
-
-function createLayout(): DiagramLayout {
-  const sources = collectSources();
-  const activeKinds = kindOrder.filter(
-    (kind) => kindTotal(kind) > 0,
-  );
-  const total = props.contributor.score;
-  if (total <= 0) {
-    throw new Error("サンキーダイアグラムの合計点が正の値ではありません。");
+function nodeFill(node: SankeyDiagramNode): string {
+  if (node.role === "source") {
+    return "#f4f1e8";
   }
-  const height = Math.max(420, sources.length * 48 + 80);
-  const sourceGap = 14;
-  const kindGap = 28;
-  const sourceCapacity =
-    height - 80 - sourceGap * Math.max(0, sources.length - 1);
-  const kindCapacity =
-    height - 80 - kindGap * Math.max(0, activeKinds.length - 1);
-  const scale = Math.min(sourceCapacity / total, kindCapacity / total);
-  if (scale <= 0) {
-    throw new Error("サンキーダイアグラムの描画領域が不足しています。");
+  if (node.unallocated) {
+    return "#fde8e3";
   }
-
-  const nodes: DiagramNode[] = [];
-  const links: DiagramLink[] = [];
-  const personHeight = total * scale;
-  const personY = (height - personHeight) / 2;
-  nodes.push({
-    id: "person",
-    label: props.contributor.login,
-    description: props.contributor.login,
-    x: 20,
-    y: personY,
-    width: 150,
-    height: personHeight,
-    color: "#0d5a40",
-  });
-
-  const kindNodes = new Map<ContributionKind, DiagramNode>();
-  const kindTotalHeight =
-    total * scale + kindGap * Math.max(0, activeKinds.length - 1);
-  let kindY = (height - kindTotalHeight) / 2;
-  for (const kind of activeKinds) {
-    const points = kindTotal(kind);
-    const node: DiagramNode = {
-      id: "kind:" + kind,
-      label: contributionKindLabel(kind),
-      description: contributionKindLabel(kind),
-      x: 410,
-      y: kindY,
-      width: 140,
-      height: points * scale,
-      color: kindColor(kind),
-    };
-    nodes.push(node);
-    kindNodes.set(kind, node);
-    kindY += node.height + kindGap;
+  if (node.role === "actor" && node.selected) {
+    return "#0d5a40";
   }
-
-  const sourceTotalHeight =
-    total * scale + sourceGap * Math.max(0, sources.length - 1);
-  let sourceY = (height - sourceTotalHeight) / 2;
-  const sourceNodes = new Map<string, DiagramNode>();
-  for (const source of sources) {
-    const node: DiagramNode = {
-      id: "source:" + source.id,
-      label: compactSourceLabel(source.source),
-      description: source.title,
-      x: 810,
-      y: sourceY,
-      width: 170,
-      height: source.total * scale,
-      color: "#f4f1e8",
-      href: sourceHref(source.source, props.range),
-    };
-    nodes.push(node);
-    sourceNodes.set(source.id, node);
-    sourceY += node.height + sourceGap;
+  if (node.selected) {
+    return "#dff3e9";
   }
-
-  let personOffset = 0;
-  for (const kind of activeKinds) {
-    const kindNode = kindNodes.get(kind);
-    assertNonNullable(kindNode, "貢献種別ノードがありません。");
-    const points = kindTotal(kind);
-    const width = points * scale;
-    links.push({
-      id: "person:" + kind,
-      path: createPath(
-        170,
-        personY + personOffset + width / 2,
-        410,
-        kindNode.y + kindNode.height / 2,
-      ),
-      width,
-      color: kindColor(kind),
-      label:
-        props.contributor.login +
-        " から " +
-        contributionKindLabel(kind) +
-        " へ " +
-        formatScore(points) +
-        " 点",
-    });
-    personOffset += width;
-  }
-
-  const kindOffsets = new Map<ContributionKind, number>();
-  const sourceOffsets = new Map<string, number>();
-  for (const source of sources) {
-    const sourceNode = sourceNodes.get(source.id);
-    assertNonNullable(sourceNode, "発生源ノードがありません。");
-    for (const kind of activeKinds) {
-      const points = source.kindPoints.get(kind) ?? 0;
-      if (points === 0) {
-        continue;
-      }
-      const kindNode = kindNodes.get(kind);
-      assertNonNullable(kindNode, "貢献種別ノードがありません。");
-      const width = points * scale;
-      const kindOffset = kindOffsets.get(kind) ?? 0;
-      const sourceOffset = sourceOffsets.get(source.id) ?? 0;
-      links.push({
-        id: kind + ":" + source.id,
-        path: createPath(
-          550,
-          kindNode.y + kindOffset + width / 2,
-          810,
-          sourceNode.y + sourceOffset + width / 2,
-        ),
-        width,
-        color: kindColor(kind),
-        label:
-          contributionKindLabel(kind) +
-          " から " +
-          source.title +
-          " へ " +
-          formatScore(points) +
-          " 点",
-        href: sourceHref(source.source, props.range),
-      });
-      kindOffsets.set(kind, kindOffset + width);
-      sourceOffsets.set(source.id, sourceOffset + width);
-    }
-  }
-  return { height, links, nodes };
+  return "#e8eef1";
 }
 
-function collectSources(): SourceFlow[] {
-  const sources = new Map<string, SourceFlow>();
-  for (const entry of props.contributor.entries) {
-    const id = entry.source.type + ":" + entry.source.key;
-    const current = sources.get(id);
-    if (current == null) {
-      sources.set(id, {
-        id,
-        source: entry.source,
-        title: entry.sourceTitle,
-        total: entry.points,
-        kindPoints: new Map([[entry.kind, entry.points]]),
-      });
-      continue;
-    }
-    current.total += entry.points;
-    current.kindPoints.set(
-      entry.kind,
-      (current.kindPoints.get(entry.kind) ?? 0) + entry.points,
-    );
+function nodeStroke(node: SankeyDiagramNode): string {
+  if (node.unallocated) {
+    return "#b33a3a";
   }
-  return [...sources.values()].sort(
-    (left, right) =>
-      right.total - left.total || left.id.localeCompare(right.id),
-  );
-}
-
-function kindTotal(kind: ContributionKind): number {
-  switch (kind) {
-    case "implementation":
-      return props.contributor.implementationPoints;
-    case "review":
-      return props.contributor.reviewPoints;
-    case "issue":
-      return props.contributor.issuePoints;
+  if (node.selected) {
+    return "#16815d";
   }
+  return "#b9c5c8";
 }
 
-function kindColor(kind: ContributionKind): string {
-  switch (kind) {
-    case "implementation":
-      return "#16815d";
-    case "review":
-      return "#3974b8";
-    case "issue":
-      return "#d2932c";
+function nodeTextFill(node: SankeyDiagramNode): string {
+  return node.role === "actor" && node.selected ? "#ffffff" : "#162521";
+}
+
+function linkColor(link: SankeyDiagramLink): string {
+  if (link.unallocated) {
+    return "#c35b4f";
   }
+  return link.selected ? "#16815d" : "#78919a";
 }
 
-function createPath(
-  startX: number,
-  startY: number,
-  endX: number,
-  endY: number,
-): string {
-  const middleX = (startX + endX) / 2;
-  return (
-    "M " +
-    startX +
-    " " +
-    startY +
-    " C " +
-    middleX +
-    " " +
-    startY +
-    ", " +
-    middleX +
-    " " +
-    endY +
-    ", " +
-    endX +
-    " " +
-    endY
-  );
-}
-
-function truncate(value: string, length: number): string {
-  return value.length <= length ? value : value.slice(0, length - 1) + "…";
-}
-
-function compactSourceLabel(source: SourceReference): string {
-  const match = /^[^/]+\/([^#]+)#([1-9]\d*)$/.exec(source.key);
-  const repository = match?.[1];
-  const number = match?.[2];
-  assertNonNullable(repository, "発生源キーにリポジトリ名がありません。");
-  assertNonNullable(number, "発生源キーに番号がありません。");
-  return truncate(repository, 17) + "#" + number;
+function linkOpacity(link: SankeyDiagramLink): number {
+  if (link.selected) {
+    return 0.62;
+  }
+  return link.unallocated ? 0.5 : 0.3;
 }
 
 function formatScore(score: number): string {
@@ -299,93 +69,148 @@ function formatScore(score: number): string {
 </script>
 
 <template>
-  <div class="overflow-x-auto rounded-2xl border border-line bg-surface p-3 sm:p-5">
-    <svg
-      class="min-w-[52rem]"
-      :viewBox="`0 0 1000 ${layout.height}`"
-      role="img"
-      :aria-label="contributor.login + ' の点数が貢献種別を経て発生源へ流れるサンキーダイアグラム'"
-    >
-      <g
-        fill="none"
-        stroke-linecap="butt"
-        opacity="0.44"
+  <div class="rounded-2xl border border-line bg-surface p-3 sm:p-5">
+    <dl class="grid gap-3 sm:grid-cols-3">
+      <div class="rounded-xl bg-accent-soft px-4 py-3">
+        <dt class="text-xs font-semibold text-accent-dark">
+          {{ contributor.login }} への最終配点
+        </dt>
+        <dd class="mt-1 font-mono text-lg font-semibold text-accent-dark">
+          {{ formatScore(layout.selectedPoints) }} 点
+        </dd>
+      </div>
+      <div class="rounded-xl bg-slate-100 px-4 py-3">
+        <dt class="text-xs font-semibold text-slate-600">
+          同じ成果から他の人物へ
+        </dt>
+        <dd class="mt-1 font-mono text-lg font-semibold text-slate-700">
+          {{ formatScore(layout.otherContributorPoints) }} 点
+        </dd>
+      </div>
+      <div class="rounded-xl bg-red-50 px-4 py-3">
+        <dt class="text-xs font-semibold text-danger">
+          誰にも配分されず図外へ流出
+        </dt>
+        <dd class="mt-1 font-mono text-lg font-semibold text-danger">
+          {{ formatScore(layout.unallocatedPoints) }} 点
+        </dd>
+      </div>
+    </dl>
+
+    <div class="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-muted">
+      <span>成果 {{ layout.sourceCount }} 件</span>
+      <span>配点経路 {{ layout.activityCount }} 件</span>
+      <span class="inline-flex items-center gap-1.5">
+        <span class="h-1.5 w-7 bg-accent" />
+        選択中の人物
+      </span>
+      <span class="inline-flex items-center gap-1.5">
+        <span class="h-1.5 w-7 bg-slate-500" />
+        他の人物
+      </span>
+      <span class="inline-flex items-center gap-1.5">
+        <span class="h-1.5 w-7 bg-red-500" />
+        未配分
+      </span>
+    </div>
+
+    <div class="mt-4 max-h-[75vh] overflow-auto rounded-xl border border-line bg-white">
+      <svg
+        class="block"
+        :width="layout.width"
+        :height="layout.height"
+        :viewBox="`0 0 ${layout.width} ${layout.height}`"
+        role="img"
+        :aria-label="contributor.login + ' に関係する成果から個別活動と人物または図外への全配点経路を示すサンキーダイアグラム'"
       >
-        <template
-          v-for="link in layout.links"
-          :key="link.id"
+        <g
+          fill="none"
+          stroke-linecap="butt"
         >
-          <a
-            v-if="link.href != null"
-            :href="link.href"
+          <template
+            v-for="link in layout.links"
+            :key="link.id"
           >
+            <a
+              v-if="link.href != null"
+              :href="link.href"
+            >
+              <path
+                :d="link.path"
+                :stroke="linkColor(link)"
+                :stroke-width="link.width"
+                :opacity="linkOpacity(link)"
+              >
+                <title>{{ link.label }}</title>
+              </path>
+            </a>
             <path
+              v-else
               :d="link.path"
-              :stroke="link.color"
+              :stroke="linkColor(link)"
               :stroke-width="link.width"
+              :opacity="linkOpacity(link)"
             >
               <title>{{ link.label }}</title>
             </path>
-          </a>
-          <path
-            v-else
-            :d="link.path"
-            :stroke="link.color"
-            :stroke-width="link.width"
-          >
-            <title>{{ link.label }}</title>
-          </path>
-        </template>
-      </g>
-
-      <template
-        v-for="node in layout.nodes"
-        :key="node.id"
-      >
-        <a
-          v-if="node.href != null"
-          :href="node.href"
-        >
-          <rect
-            :x="node.x"
-            :y="node.y"
-            :width="node.width"
-            :height="node.height"
-            :fill="node.color"
-            stroke="#d7ddd4"
-            rx="5"
-          >
-            <title>{{ node.description }}</title>
-          </rect>
-          <text
-            :x="node.x + 10"
-            :y="node.y + node.height / 2"
-            dominant-baseline="middle"
-            class="fill-ink text-[12px] font-semibold"
-          >
-            {{ node.label }}
-          </text>
-        </a>
-        <g v-else>
-          <rect
-            :x="node.x"
-            :y="node.y"
-            :width="node.width"
-            :height="node.height"
-            :fill="node.color"
-            rx="5"
-          />
-          <text
-            :x="node.x + node.width / 2"
-            :y="node.y + node.height / 2"
-            dominant-baseline="middle"
-            text-anchor="middle"
-            class="fill-white text-[13px] font-semibold"
-          >
-            {{ node.label }}
-          </text>
+          </template>
         </g>
-      </template>
-    </svg>
+
+        <template
+          v-for="node in layout.nodes"
+          :key="node.id"
+        >
+          <a
+            v-if="node.href != null"
+            :href="node.href"
+          >
+            <rect
+              :x="node.x"
+              :y="node.y"
+              :width="node.width"
+              :height="node.height"
+              :fill="nodeFill(node)"
+              :stroke="nodeStroke(node)"
+              :stroke-dasharray="node.unallocated ? '8 5' : undefined"
+              rx="5"
+            >
+              <title>{{ node.description }}</title>
+            </rect>
+            <text
+              :x="node.x + 11"
+              :y="node.y + node.height / 2"
+              :fill="nodeTextFill(node)"
+              dominant-baseline="middle"
+              class="text-[12px] font-semibold"
+            >
+              {{ node.label }}
+            </text>
+          </a>
+          <g v-else>
+            <rect
+              :x="node.x"
+              :y="node.y"
+              :width="node.width"
+              :height="node.height"
+              :fill="nodeFill(node)"
+              :stroke="nodeStroke(node)"
+              :stroke-dasharray="node.unallocated ? '8 5' : undefined"
+              rx="5"
+            >
+              <title>{{ node.description }}</title>
+            </rect>
+            <text
+              :x="node.x + 11"
+              :y="node.y + node.height / 2"
+              :fill="nodeTextFill(node)"
+              dominant-baseline="middle"
+              class="text-[12px] font-semibold"
+            >
+              {{ node.label }}
+            </text>
+          </g>
+        </template>
+      </svg>
+    </div>
   </div>
 </template>

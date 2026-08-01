@@ -3,6 +3,7 @@ import type {
   ContributionKind,
   ContributorScore,
   DateRange,
+  LeaderboardResult,
 } from "../domain/model.ts";
 import { contributionKindLabel } from "../domain/scoring.ts";
 import { routeHref, sourceHref } from "../services/routes.ts";
@@ -11,6 +12,7 @@ import SankeyDiagram from "./SankeyDiagram.vue";
 const props = defineProps<{
   contributor: ContributorScore;
   range: DateRange;
+  result: LeaderboardResult;
 }>();
 
 const githubProfileUrl =
@@ -121,12 +123,12 @@ function kindClass(kind: ContributionKind): string {
         ポイントの発生源
       </h2>
       <p class="mt-2 mb-5 max-w-3xl text-sm leading-7 text-muted">
-        合計点を実装、レビュー、Issue・調査へ分け、右端の PR または Issue までたどれます。
-        右端の項目を選ぶと詳細ページへ移動します。
+        左端の成果から採点対象になった活動を一件ずつ経由し、右端の人物までたどれます。
+        同じ成果から他の人物へ届いた点と、誰にも配分されず図外へ流出した点も表示します。
       </p>
       <SankeyDiagram
         :contributor="contributor"
-        :range="range"
+        :result="result"
       />
     </section>
 

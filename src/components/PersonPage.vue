@@ -10,6 +10,7 @@ import { contributionKindLabel } from "../domain/scoring.ts";
 import { routeHref, sourceHref } from "../services/routes.ts";
 import type { SankeyDiagramSelection } from "../services/sankeyDiagram.ts";
 import SankeyDiagram from "./SankeyDiagram.vue";
+import ScoreBreakdownBar from "./ScoreBreakdownBar.vue";
 
 const props = defineProps<{
   contributor: ContributorScore;
@@ -87,32 +88,20 @@ function kindClass(kind: ContributionKind): string {
         </div>
       </div>
 
-      <dl class="mt-7 grid grid-cols-3 divide-x divide-line border-y border-line py-4 text-center">
-        <div>
-          <dt class="text-xs text-muted">
-            実装
-          </dt>
-          <dd class="mt-1 font-mono text-lg">
-            {{ formatScore(contributor.implementationPoints) }}
-          </dd>
-        </div>
-        <div>
-          <dt class="text-xs text-muted">
-            レビュー
-          </dt>
-          <dd class="mt-1 font-mono text-lg">
-            {{ formatScore(contributor.reviewPoints) }}
-          </dd>
-        </div>
-        <div>
-          <dt class="text-xs text-muted">
-            Issue・調査
-          </dt>
-          <dd class="mt-1 font-mono text-lg">
-            {{ formatScore(contributor.issuePoints) }}
-          </dd>
-        </div>
-      </dl>
+      <div class="mt-7 border-y border-line py-4">
+        <p class="mb-3 text-xs font-semibold text-muted">
+          点数内訳
+        </p>
+        <ScoreBreakdownBar
+          :breakdown="{
+            type: 'allocated',
+            implementationPoints: contributor.implementationPoints,
+            reviewPoints: contributor.reviewPoints,
+            issuePoints: contributor.issuePoints,
+          }"
+          density="comfortable"
+        />
+      </div>
     </section>
 
     <section

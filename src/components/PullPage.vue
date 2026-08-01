@@ -11,6 +11,7 @@ import { contributionKindLabel } from "../domain/scoring.ts";
 import { routeHref } from "../services/routes.ts";
 import type { SankeyDiagramSelection } from "../services/sankeyDiagram.ts";
 import SankeyDiagram from "./SankeyDiagram.vue";
+import ScoreBreakdownBar from "./ScoreBreakdownBar.vue";
 
 const props = defineProps<{
   pull: PreparedPull;
@@ -203,6 +204,22 @@ function kindClass(kind: ContributionKind): string {
             {{ formatScore(workstream.importance) }}
           </p>
         </div>
+      </div>
+
+      <div class="mt-7">
+        <h3 class="mb-3 font-semibold">
+          ポイント内訳
+        </h3>
+        <ScoreBreakdownBar
+          :breakdown="{
+            type: 'workstream',
+            implementationPoints: workstream.implementationPoints,
+            reviewPoints: workstream.reviewPoints,
+            issuePoints: workstream.issuePoints,
+            unallocatedPoints: workstream.unallocatedPoints,
+          }"
+          density="comfortable"
+        />
       </div>
 
       <h3 class="mt-7 font-semibold">

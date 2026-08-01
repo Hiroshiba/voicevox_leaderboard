@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { LeaderboardResult } from "../domain/model.ts";
 import { routeHref } from "../services/routes.ts";
+import ScoreBreakdownBar from "./ScoreBreakdownBar.vue";
 
 defineProps<{
   result: LeaderboardResult;
@@ -55,14 +56,8 @@ function formatScore(score: number): string {
             <th class="px-4 py-3 font-semibold">
               人物
             </th>
-            <th class="px-4 py-3 text-right font-semibold">
-              実装
-            </th>
-            <th class="px-4 py-3 text-right font-semibold">
-              レビュー
-            </th>
-            <th class="px-4 py-3 text-right font-semibold">
-              Issue
+            <th class="w-[25rem] px-4 py-3 font-semibold">
+              点数内訳
             </th>
             <th class="px-5 py-3 text-right font-semibold">
               合計
@@ -94,14 +89,16 @@ function formatScore(score: number): string {
                 {{ contributor.login }}
               </a>
             </td>
-            <td class="px-4 py-4 text-right font-mono text-sm">
-              {{ formatScore(contributor.implementationPoints) }}
-            </td>
-            <td class="px-4 py-4 text-right font-mono text-sm">
-              {{ formatScore(contributor.reviewPoints) }}
-            </td>
-            <td class="px-4 py-4 text-right font-mono text-sm">
-              {{ formatScore(contributor.issuePoints) }}
+            <td class="px-4 py-4">
+              <ScoreBreakdownBar
+                :breakdown="{
+                  type: 'allocated',
+                  implementationPoints: contributor.implementationPoints,
+                  reviewPoints: contributor.reviewPoints,
+                  issuePoints: contributor.issuePoints,
+                }"
+                density="compact"
+              />
             </td>
             <td class="px-5 py-4 text-right font-display text-xl font-semibold text-accent-dark">
               {{ formatScore(contributor.score) }}

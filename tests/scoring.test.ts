@@ -5,6 +5,7 @@ import {
   calculateImportance,
   calculatePullMass,
   calculateStandaloneIssueScore,
+  contributionKinds,
   totalAllocations,
 } from "../src/domain/scoring";
 import type { ScoreAllocation } from "../src/domain/model";
@@ -125,6 +126,16 @@ describe("totalAllocations", () => {
 
     expect([...grouped.keys()]).toEqual(["hiroshiba"]);
     expect(grouped.get("hiroshiba")).toHaveLength(2);
+  });
+});
+
+describe("contributionKinds", () => {
+  it("点数内訳の種類を共通の順序で定義する", () => {
+    expect(contributionKinds).toEqual([
+      "implementation",
+      "review",
+      "issue",
+    ]);
   });
 });
 

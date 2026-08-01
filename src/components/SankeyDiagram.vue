@@ -1,7 +1,11 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { UnreachableError } from "../domain/errors.ts";
-import type { LeaderboardResult } from "../domain/model.ts";
+import type { ContributionKind, LeaderboardResult } from "../domain/model.ts";
+import {
+  contributionKindLabel,
+  contributionKinds,
+} from "../domain/scoring.ts";
 import {
   createSankeyDiagramLayout,
   type SankeyDiagramLink,
@@ -89,6 +93,19 @@ function linkOpacity(link: SankeyDiagramLink): number {
   return 0.32;
 }
 
+function legendClass(kind: ContributionKind): string {
+  switch (kind) {
+    case "implementation":
+      return "bg-emerald-600";
+    case "review":
+      return "bg-blue-600";
+    case "issue":
+      return "bg-amber-600";
+    default:
+      throw new UnreachableError(kind);
+  }
+}
+
 function formatScore(score: number): string {
   return score.toFixed(2);
 }
@@ -119,17 +136,16 @@ function formatScore(score: number): string {
       <span>発生源 {{ layout.originCount }} 件</span>
       <span>配点明細 {{ layout.allocationCount }} 件</span>
       <span>配点先 {{ layout.contributorCount }} 人</span>
-      <span class="inline-flex items-center gap-1.5">
-        <span class="h-1.5 w-7 bg-emerald-600" />
-        実装
-      </span>
-      <span class="inline-flex items-center gap-1.5">
-        <span class="h-1.5 w-7 bg-blue-600" />
-        レビュー
-      </span>
-      <span class="inline-flex items-center gap-1.5">
-        <span class="h-1.5 w-7 bg-amber-600" />
-        Issue・調査
+      <span
+        v-for="kind in contributionKinds"
+        :key="kind"
+        class="inline-flex items-center gap-1.5"
+      >
+        <span
+          class="h-1.5 w-7"
+          :class="legendClass(kind)"
+        />
+        {{ contributionKindLabel(kind) }}
       </span>
       <span>選択対象に関係する経路は濃く表示</span>
     </div>

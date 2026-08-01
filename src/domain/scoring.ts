@@ -1,9 +1,16 @@
 import { UnreachableError } from "./errors.ts";
 import type {
+  ContributionKind,
   FileScore,
   ScoreAllocation,
   WorkstreamScore,
 } from "./model.ts";
+
+export const contributionKinds = [
+  "implementation",
+  "review",
+  "issue",
+] satisfies ContributionKind[];
 
 export interface FileChange {
   filename: string;
@@ -149,7 +156,7 @@ export function totalAllocations(
 
 /** 貢献種別を日本語表示へ変換する。 */
 export function contributionKindLabel(
-  kind: ScoreAllocation["kind"],
+  kind: ContributionKind,
 ): string {
   switch (kind) {
     case "implementation":

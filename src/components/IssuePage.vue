@@ -13,6 +13,7 @@ import { contributionKindLabel } from "../domain/scoring.ts";
 import { routeHref } from "../services/routes.ts";
 import type { SankeyDiagramSelection } from "../services/sankeyDiagram.ts";
 import SankeyDiagram from "./SankeyDiagram.vue";
+import ScoreBreakdownBar from "./ScoreBreakdownBar.vue";
 
 const props = defineProps<{
   issue: PreparedIssue;
@@ -241,6 +242,20 @@ function evidenceLabel(kind: EvidenceKind): string {
         実質的コメント {{ standalone.substantiveCommentCount }} 件 ・ 参加者
         {{ standalone.participantCount }} 人
       </p>
+      <div class="mt-5">
+        <h3 class="mb-3 font-semibold">
+          ポイント内訳
+        </h3>
+        <ScoreBreakdownBar
+          :breakdown="{
+            type: 'allocated',
+            implementationPoints: 0,
+            reviewPoints: 0,
+            issuePoints: standalone.score,
+          }"
+          density="comfortable"
+        />
+      </div>
       <ul class="mt-5 space-y-2">
         <li
           v-for="allocation in standalone.allocations"
@@ -291,6 +306,22 @@ function evidenceLabel(kind: EvidenceKind): string {
             {{ formatScore(workstream.importance) }}
           </p>
         </div>
+      </div>
+
+      <div class="mt-7">
+        <h3 class="mb-3 font-semibold">
+          ポイント内訳
+        </h3>
+        <ScoreBreakdownBar
+          :breakdown="{
+            type: 'workstream',
+            implementationPoints: workstream.implementationPoints,
+            reviewPoints: workstream.reviewPoints,
+            issuePoints: workstream.issuePoints,
+            unallocatedPoints: workstream.unallocatedPoints,
+          }"
+          density="comfortable"
+        />
       </div>
 
       <ul class="mt-5 space-y-2">

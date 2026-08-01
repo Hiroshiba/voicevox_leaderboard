@@ -1,3 +1,6 @@
+/// <reference types="node" />
+
+import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type {
   Actor,
@@ -10,7 +13,12 @@ import type {
   UnallocatedScore,
   WorkstreamScore,
 } from "../src/domain/model";
-import { createSankeyDiagramLayout } from "../src/services/sankeyDiagram";
+import { parseLeaderboardDataset } from "../src/domain/dataset";
+import { calculateLeaderboard } from "../src/services/calculateLeaderboard";
+import {
+  createSankeyDiagramLayout,
+  type SankeyDiagramSelection,
+} from "../src/services/sankeyDiagram";
 
 const alice = actor("alice");
 const bob = actor("bob");
@@ -156,6 +164,11 @@ const contributor: ContributorScore = {
   ],
 };
 
+const contributorSelection = {
+  type: "contributor",
+  contributor,
+} satisfies SankeyDiagramSelection;
+
 const result: LeaderboardResult = {
   range: {
     start: "2026-07-01",
@@ -168,7 +181,7 @@ const result: LeaderboardResult = {
 
 describe("createSankeyDiagramLayout", () => {
   it("同じ PR、Issue、人物を一つのノードへまとめる", () => {
-    const layout = createSankeyDiagramLayout(result, contributor);
+    const layout = createSankeyDiagramLayout(result, contributorSelection);
     const pullNodes = layout.nodes.filter((node) => node.role === "pull");
     const issueNodes = layout.nodes.filter((node) => node.role === "issue");
     const actorNodes = layout.nodes.filter((node) => node.role === "actor");
@@ -187,12 +200,13 @@ describe("createSankeyDiagramLayout", () => {
     expect(bobNodes[0]?.points).toBe(3);
     expect(layout.originCount).toBe(2);
     expect(layout.allocationCount).toBe(5);
-    expect(layout.selectedPoints).toBe(6);
-    expect(layout.otherContributorPoints).toBe(3);
+    expect(layout.highlightedPoints).toBe(6);
+    expect(layout.totalAllocatedPoints).toBe(9);
+    expect(layout.contributorCount).toBe(2);
   });
 
   it("未配分点をノードにもリンクにも含めない", () => {
-    const layout = createSankeyDiagramLayout(result, contributor);
+    const layout = createSankeyDiagramLayout(result, contributorSelection);
     const ids = [
       ...layout.nodes.map((node) => node.id),
       ...layout.links.map((link) => link.id),
@@ -205,7 +219,7 @@ describe("createSankeyDiagramLayout", () => {
   });
 
   it("PR から人物へ直接つなぎ、Issue 経由の配点は中列へつなぐ", () => {
-    const layout = createSankeyDiagramLayout(result, contributor);
+    const layout = createSankeyDiagramLayout(result, contributorSelection);
     const pullId = "pull:voicevox/voicevox#1";
     const issueId = "issue:voicevox/voicevox#10";
     const directLink = layout.links.find(
@@ -242,7 +256,7 @@ describe("createSankeyDiagramLayout", () => {
   });
 
   it("配点種別をノードにせずリンクへ保持する", () => {
-    const layout = createSankeyDiagramLayout(result, contributor);
+    const layout = createSankeyDiagramLayout(result, contributorSelection);
     const roles = new Set(layout.nodes.map((node) => node.role));
     const kinds = new Set(layout.links.map((link) => link.kind));
 
@@ -254,6 +268,57 @@ describe("createSankeyDiagramLayout", () => {
     expect(
       layout.links.every((link) => link.href.startsWith("/")),
     ).toBe(true);
+  });
+
+  it("PR に関係する成果の配点経路を表示する", () => {
+    const layout = createSankeyDiagramLayout(result, {
+      type: "pull",
+      key: pull.key,
+    });
+    const selectedNode = layout.nodes.find(
+      (node) => node.id === "pull:voicevox/voicevox#1",
+    );
+
+    expect(selectedNode?.selected).toBe(true);
+    expect(layout.nodes.some((node) => node.id.includes("#20"))).toBe(false);
+    expect(layout.links).toHaveLength(6);
+    expect(layout.links.every((link) => link.selected)).toBe(true);
+    expect(layout.highlightedPoints).toBe(7);
+    expect(layout.totalAllocatedPoints).toBe(7);
+    expect(layout.contributorCount).toBe(2);
+  });
+
+  it("関連 Issue に関係する全成果の配点経路を表示する", () => {
+    const layout = createSankeyDiagramLayout(result, {
+      type: "issue",
+      key: "voicevox/voicevox#10",
+    });
+    const selectedNode = layout.nodes.find(
+      (node) => node.id === "issue:voicevox/voicevox#10",
+    );
+
+    expect(selectedNode?.selected).toBe(true);
+    expect(layout.links).toHaveLength(6);
+    expect(layout.links.every((link) => link.selected)).toBe(true);
+    expect(layout.highlightedPoints).toBe(7);
+    expect(layout.totalAllocatedPoints).toBe(7);
+  });
+
+  it("独立 Issue から人物への配点経路を表示する", () => {
+    const layout = createSankeyDiagramLayout(result, {
+      type: "issue",
+      key: standalone.key,
+    });
+    const issueNode = layout.nodes.find(
+      (node) => node.id === "issue:voicevox/voicevox#20",
+    );
+
+    expect(issueNode?.selected).toBe(true);
+    expect(layout.nodes).toHaveLength(2);
+    expect(layout.links).toHaveLength(1);
+    expect(layout.highlightedPoints).toBe(2);
+    expect(layout.totalAllocatedPoints).toBe(2);
+    expect(layout.originCount).toBe(1);
   });
 
   it("成果総量と詳細経路の点数が一致しない場合は拒否する", () => {
@@ -268,8 +333,56 @@ describe("createSankeyDiagramLayout", () => {
     };
 
     expect(() =>
-      createSankeyDiagramLayout(invalidResult, contributor),
+      createSankeyDiagramLayout(invalidResult, contributorSelection),
     ).toThrow("総量と詳細経路の合計が一致しません");
+  });
+
+  it("事前取得データの全対象について配点経路を生成できる", async () => {
+    const raw: unknown = JSON.parse(
+      await readFile(
+        new URL("../public/data/leaderboard-data.json", import.meta.url),
+        "utf8",
+      ),
+    );
+    const dataset = parseLeaderboardDataset(raw);
+    const actualResult = calculateLeaderboard(dataset, dataset.range);
+    const issueKeys = new Set<string>();
+    let pullCount = 0;
+
+    for (const actualContributor of actualResult.contributors) {
+      createSankeyDiagramLayout(actualResult, {
+        type: "contributor",
+        contributor: actualContributor,
+      });
+    }
+    for (const actualWorkstream of actualResult.workstreams) {
+      if (actualWorkstream.allocations.length === 0) {
+        continue;
+      }
+      for (const actualPull of actualWorkstream.pulls) {
+        createSankeyDiagramLayout(actualResult, {
+          type: "pull",
+          key: actualPull.key,
+        });
+        pullCount += 1;
+      }
+      if (actualWorkstream.issue != null) {
+        issueKeys.add(actualWorkstream.issue.key);
+      }
+    }
+    for (const actualIssue of actualResult.standaloneIssues) {
+      issueKeys.add(actualIssue.key);
+    }
+    for (const issueKey of issueKeys) {
+      createSankeyDiagramLayout(actualResult, {
+        type: "issue",
+        key: issueKey,
+      });
+    }
+
+    expect(actualResult.contributors.length).toBeGreaterThan(0);
+    expect(pullCount).toBeGreaterThan(0);
+    expect(issueKeys.size).toBeGreaterThan(0);
   });
 });
 

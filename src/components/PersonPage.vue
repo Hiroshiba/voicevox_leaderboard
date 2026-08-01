@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from "vue";
 import type {
   ContributionKind,
   ContributorScore,
@@ -7,6 +8,7 @@ import type {
 } from "../domain/model.ts";
 import { contributionKindLabel } from "../domain/scoring.ts";
 import { routeHref, sourceHref } from "../services/routes.ts";
+import type { SankeyDiagramSelection } from "../services/sankeyDiagram.ts";
 import SankeyDiagram from "./SankeyDiagram.vue";
 
 const props = defineProps<{
@@ -17,6 +19,10 @@ const props = defineProps<{
 
 const githubProfileUrl =
   "https://github.com/" + encodeURIComponent(props.contributor.login);
+const sankeySelection = computed<SankeyDiagramSelection>(() => ({
+  type: "contributor",
+  contributor: props.contributor,
+}));
 
 function formatScore(score: number): string {
   return score.toFixed(2);
@@ -129,8 +135,8 @@ function kindClass(kind: ContributionKind): string {
         同じ PR、Issue、人物は一つのノードにまとめ、未配分点は表示しません。
       </p>
       <SankeyDiagram
-        :contributor="contributor"
         :result="result"
+        :selection="sankeySelection"
       />
     </section>
 

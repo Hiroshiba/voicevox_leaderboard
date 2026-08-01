@@ -1,18 +1,32 @@
 <script setup lang="ts">
+import { computed } from "vue";
 import type {
   ContributionKind,
   DateRange,
+  LeaderboardResult,
   PreparedPull,
   WorkstreamScore,
 } from "../domain/model.ts";
 import { contributionKindLabel } from "../domain/scoring.ts";
 import { routeHref } from "../services/routes.ts";
+import type { SankeyDiagramSelection } from "../services/sankeyDiagram.ts";
+import SankeyDiagram from "./SankeyDiagram.vue";
 
-defineProps<{
+const props = defineProps<{
   pull: PreparedPull;
   workstream?: WorkstreamScore | undefined;
   range: DateRange;
+  result: LeaderboardResult;
 }>();
+
+const sankeySelection = computed<SankeyDiagramSelection>(() => ({
+  type: "pull",
+  key: props.pull.key,
+}));
+const hasSankeyData = computed(
+  () =>
+    props.workstream != null && props.workstream.allocations.length > 0,
+);
 
 function formatScore(score: number): string {
   return score.toFixed(2);
@@ -120,6 +134,42 @@ function kindClass(kind: ContributionKind): string {
         </div>
       </dl>
     </article>
+
+    <section
+      class="mt-10"
+      aria-labelledby="pull-sankey-heading"
+    >
+      <p class="mb-1 text-xs font-semibold tracking-[0.18em] text-accent uppercase">
+        Score flow
+      </p>
+      <h2
+        id="pull-sankey-heading"
+        class="font-display text-2xl font-semibold"
+      >
+        この PR からのポイント経路
+      </h2>
+      <p class="mt-2 mb-5 max-w-3xl text-sm leading-7 text-muted">
+        実装とレビューは PR から人物へ直接流れます。
+        Issue・調査は関連 Issue を経由して人物へ流れます。
+        同じ成果に含まれる別の PR がある場合は、その経路も比較できるように表示します。
+      </p>
+      <SankeyDiagram
+        v-if="hasSankeyData"
+        :result="result"
+        :selection="sankeySelection"
+      />
+      <div
+        v-else
+        class="rounded-2xl border border-line bg-surface px-6 py-10 text-center"
+      >
+        <p class="font-semibold">
+          選択期間にはこの PR からの配点がありません
+        </p>
+        <p class="mt-2 text-sm text-muted">
+          PR のマージ日を含む期間へ変更すると経路を表示できます。
+        </p>
+      </div>
+    </section>
 
     <section
       v-if="workstream != null"

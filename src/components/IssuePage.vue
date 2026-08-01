@@ -4,19 +4,35 @@ import { UnreachableError } from "../domain/errors.ts";
 import type {
   DateRange,
   EvidenceKind,
+  LeaderboardResult,
   PreparedIssue,
   StandaloneIssueScore,
   WorkstreamScore,
 } from "../domain/model.ts";
 import { contributionKindLabel } from "../domain/scoring.ts";
 import { routeHref } from "../services/routes.ts";
+import type { SankeyDiagramSelection } from "../services/sankeyDiagram.ts";
+import SankeyDiagram from "./SankeyDiagram.vue";
 
 const props = defineProps<{
   issue: PreparedIssue;
   workstreams: WorkstreamScore[];
   standalone?: StandaloneIssueScore | undefined;
   range: DateRange;
+  result: LeaderboardResult;
 }>();
+
+const sankeySelection = computed<SankeyDiagramSelection>(() => ({
+  type: "issue",
+  key: props.issue.key,
+}));
+const hasSankeyData = computed(
+  () =>
+    props.standalone != null ||
+    props.workstreams.some(
+      (workstream) => workstream.allocations.length > 0,
+    ),
+);
 
 const commentsInRange = computed(() =>
   props.issue.comments.filter((comment) => {
@@ -163,6 +179,41 @@ function evidenceLabel(kind: EvidenceKind): string {
         </span>
       </div>
     </article>
+
+    <section
+      class="mt-10"
+      aria-labelledby="issue-sankey-heading"
+    >
+      <p class="mb-1 text-xs font-semibold tracking-[0.18em] text-accent uppercase">
+        Score flow
+      </p>
+      <h2
+        id="issue-sankey-heading"
+        class="font-display text-2xl font-semibold"
+      >
+        この Issue からのポイント経路
+      </h2>
+      <p class="mt-2 mb-5 max-w-3xl text-sm leading-7 text-muted">
+        関連 PR がある場合は PR から Issue と人物への経路を表示します。
+        PR にならなかった Issue は Issue から人物への経路を表示します。
+      </p>
+      <SankeyDiagram
+        v-if="hasSankeyData"
+        :result="result"
+        :selection="sankeySelection"
+      />
+      <div
+        v-else
+        class="rounded-2xl border border-line bg-surface px-6 py-10 text-center"
+      >
+        <p class="font-semibold">
+          選択期間にはこの Issue からの配点がありません
+        </p>
+        <p class="mt-2 text-sm text-muted">
+          Issue の活動を含む期間へ変更すると経路を表示できる場合があります。
+        </p>
+      </div>
+    </section>
 
     <section
       v-if="standalone != null"

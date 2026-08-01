@@ -1,25 +1,53 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import type {
-  ContributorScore,
-  LeaderboardResult,
-} from "../domain/model.ts";
+import { UnreachableError } from "../domain/errors.ts";
+import type { LeaderboardResult } from "../domain/model.ts";
 import {
   createSankeyDiagramLayout,
   type SankeyDiagramLink,
   type SankeyDiagramNode,
+  type SankeyDiagramSelection,
 } from "../services/sankeyDiagram.ts";
 
 const props = defineProps<{
-  contributor: ContributorScore;
+  selection: SankeyDiagramSelection;
   result: LeaderboardResult;
 }>();
 
 const layout = computed(() =>
-  createSankeyDiagramLayout(props.result, props.contributor),
+  createSankeyDiagramLayout(props.result, props.selection),
 );
 
+const selectionLabel = computed((): string => {
+  switch (props.selection.type) {
+    case "contributor":
+      return props.selection.contributor.login;
+    case "pull":
+      return props.selection.key;
+    case "issue":
+      return props.selection.key;
+    default:
+      throw new UnreachableError(props.selection);
+  }
+});
+
+const highlightedPointsLabel = computed((): string => {
+  switch (props.selection.type) {
+    case "contributor":
+      return props.selection.contributor.login + " への最終配点";
+    case "pull":
+      return "この PR に関係する人物配点";
+    case "issue":
+      return "この Issue に関係する人物配点";
+    default:
+      throw new UnreachableError(props.selection);
+  }
+});
+
 function nodeFill(node: SankeyDiagramNode): string {
+  if (node.selected && node.role !== "actor") {
+    return "#dff3e9";
+  }
   if (node.role === "pull") {
     return "#f4f1e8";
   }
@@ -71,18 +99,18 @@ function formatScore(score: number): string {
     <dl class="grid gap-3 sm:grid-cols-2">
       <div class="rounded-xl bg-accent-soft px-4 py-3">
         <dt class="text-xs font-semibold text-accent-dark">
-          {{ contributor.login }} への最終配点
+          {{ highlightedPointsLabel }}
         </dt>
         <dd class="mt-1 font-mono text-lg font-semibold text-accent-dark">
-          {{ formatScore(layout.selectedPoints) }} 点
+          {{ formatScore(layout.highlightedPoints) }} 点
         </dd>
       </div>
       <div class="rounded-xl bg-slate-100 px-4 py-3">
         <dt class="text-xs font-semibold text-slate-600">
-          同じ成果から他の人物へ
+          図内の人物への総配点
         </dt>
         <dd class="mt-1 font-mono text-lg font-semibold text-slate-700">
-          {{ formatScore(layout.otherContributorPoints) }} 点
+          {{ formatScore(layout.totalAllocatedPoints) }} 点
         </dd>
       </div>
     </dl>
@@ -90,6 +118,7 @@ function formatScore(score: number): string {
     <div class="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-muted">
       <span>発生源 {{ layout.originCount }} 件</span>
       <span>配点明細 {{ layout.allocationCount }} 件</span>
+      <span>配点先 {{ layout.contributorCount }} 人</span>
       <span class="inline-flex items-center gap-1.5">
         <span class="h-1.5 w-7 bg-emerald-600" />
         実装
@@ -102,17 +131,17 @@ function formatScore(score: number): string {
         <span class="h-1.5 w-7 bg-amber-600" />
         Issue・調査
       </span>
-      <span>選択中の人物への経路は濃く表示</span>
+      <span>選択対象に関係する経路は濃く表示</span>
     </div>
 
-    <div class="mt-4 max-h-[75vh] overflow-auto rounded-xl border border-line bg-white">
+    <div class="mt-4 overflow-x-auto rounded-xl border border-line bg-white">
       <svg
         class="block"
         :width="layout.width"
         :height="layout.height"
         :viewBox="`0 0 ${layout.width} ${layout.height}`"
         role="img"
-        :aria-label="contributor.login + ' に関係する PR と Issue から人物への配点経路を示すサンキーダイアグラム'"
+        :aria-label="selectionLabel + ' に関係する PR と Issue から人物への配点経路を示すサンキーダイアグラム'"
       >
         <g
           fill="none"

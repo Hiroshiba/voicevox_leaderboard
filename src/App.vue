@@ -605,6 +605,7 @@ function describeError(error: unknown): string {
         :pull="currentPull"
         :workstream="currentPullWorkstream"
         :range="readyState.result.range"
+        :result="readyState.result"
       />
 
       <IssuePage
@@ -613,6 +614,7 @@ function describeError(error: unknown): string {
         :workstreams="currentIssueWorkstreams"
         :standalone="currentStandaloneIssue"
         :range="readyState.result.range"
+        :result="readyState.result"
       />
 
       <main

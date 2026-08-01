@@ -12,6 +12,11 @@ import { routeHref, sourceHref } from "./routes.ts";
 
 export type SankeyDiagramNodeRole = "pull" | "issue" | "actor";
 
+export type SankeyDiagramSelection =
+  | { type: "contributor"; contributor: ContributorScore }
+  | { type: "pull"; key: string }
+  | { type: "issue"; key: string };
+
 export interface SankeyDiagramNode {
   id: string;
   role: SankeyDiagramNodeRole;
@@ -46,8 +51,9 @@ export interface SankeyDiagramLayout {
   links: SankeyDiagramLink[];
   originCount: number;
   allocationCount: number;
-  selectedPoints: number;
-  otherContributorPoints: number;
+  highlightedPoints: number;
+  totalAllocatedPoints: number;
+  contributorCount: number;
 }
 
 interface ReferenceFlowNode {
@@ -55,7 +61,7 @@ interface ReferenceFlowNode {
   role: "pull" | "issue";
   reference: SourceReference;
   title: string;
-  selected: false;
+  selected: boolean;
 }
 
 interface ActorFlowNode {
@@ -85,6 +91,7 @@ interface FlowGraph {
 }
 
 interface FlowGraphBuilder {
+  selection: SankeyDiagramSelection;
   nodes: Map<string, FlowNode>;
   links: FlowLink[];
   linkIds: Set<string>;
@@ -119,36 +126,35 @@ const minimumFlowWidth = 1;
 const minimumNodeHeight = 42;
 const nodeGap = 16;
 
-/** 人物に関係する配点を PR、Issue、人物の経路として配置する。 */
+/** 選択対象に関係する配点を PR、Issue、人物の経路として配置する。 */
 export function createSankeyDiagramLayout(
   result: LeaderboardResult,
-  contributor: ContributorScore,
+  selection: SankeyDiagramSelection,
 ): SankeyDiagramLayout {
-  const graph = collectFlowGraph(result, contributor);
+  const graph = collectFlowGraph(result, selection);
   if (graph.links.length === 0) {
-    throw new Error("人物に関係する配点経路がありません。");
+    throw new Error("選択対象に関係する配点経路がありません。");
   }
   const nodeLayouts = layoutNodes(graph);
-  const selectedActorId = actorNodeId(contributor.login);
-  const selectedPoints = sum(
-    graph.links
-      .filter((link) => link.targetId === selectedActorId)
-      .map((link) => link.points),
-  );
-  const otherContributorPoints = sum(
+  const highlightedPoints = sum(
     graph.links
       .filter(
-        (link) =>
-          link.targetId.startsWith("actor:") &&
-          link.targetId !== selectedActorId,
+        (link) => link.targetId.startsWith("actor:") && link.selected,
       )
       .map((link) => link.points),
   );
-  assertNearlyEqual(
-    contributor.score,
-    selectedPoints,
-    "人物の合計点と図内の人物への流入点が一致しません。",
+  const totalAllocatedPoints = sum(
+    graph.links
+      .filter((link) => link.targetId.startsWith("actor:"))
+      .map((link) => link.points),
   );
+  if (selection.type === "contributor") {
+    assertNearlyEqual(
+      selection.contributor.score,
+      highlightedPoints,
+      "人物の合計点と図内の人物への流入点が一致しません。",
+    );
+  }
   const targetIds = new Set(graph.links.map((link) => link.targetId));
 
   return {
@@ -161,17 +167,19 @@ export function createSankeyDiagramLayout(
     originCount: graph.nodes.filter((node) => targetIds.has(node.id) === false)
       .length,
     allocationCount: graph.allocationCount,
-    selectedPoints,
-    otherContributorPoints,
+    highlightedPoints,
+    totalAllocatedPoints,
+    contributorCount: graph.nodes.filter((node) => node.role === "actor")
+      .length,
   };
 }
 
 function collectFlowGraph(
   result: LeaderboardResult,
-  contributor: ContributorScore,
+  selection: SankeyDiagramSelection,
 ): FlowGraph {
-  const selectedLogin = contributor.login.toLowerCase();
   const builder: FlowGraphBuilder = {
+    selection,
     nodes: new Map<string, FlowNode>(),
     links: [],
     linkIds: new Set<string>(),
@@ -180,13 +188,19 @@ function collectFlowGraph(
   };
 
   for (const workstream of result.workstreams) {
-    if (hasAllocationFor(workstream.allocations, selectedLogin) === false) {
+    if (selectionMatchesWorkstream(selection, workstream) === false) {
       continue;
     }
-    collectWorkstreamFlows(builder, workstream, result, selectedLogin);
+    collectWorkstreamFlows(builder, workstream, result);
   }
   for (const standalone of result.standaloneIssues) {
-    if (hasAllocationFor(standalone.allocations, selectedLogin) === false) {
+    if (
+      selectionMatchesStandaloneIssue(
+        selection,
+        standalone.key,
+        standalone.allocations,
+      ) === false
+    ) {
       continue;
     }
     assertNearlyEqual(
@@ -216,18 +230,28 @@ function collectFlowGraph(
         allocation,
         "standalone:" + standalone.key,
         result,
-        selectedLogin,
+        allocationMatchesStandaloneSelection(
+          selection,
+          standalone.key,
+          allocation,
+        ),
       );
     }
   }
 
-  const selectedIds = builder.selectedAllocationIds.toSorted();
-  const contributorIds = contributor.entries.map((entry) => entry.id).toSorted();
-  if (
-    selectedIds.length !== contributorIds.length ||
-    selectedIds.some((id, index) => id !== contributorIds[index])
-  ) {
-    throw new Error("人物の配点明細とサンキーダイアグラムの経路が一致しません。");
+  if (selection.type === "contributor") {
+    const selectedIds = builder.selectedAllocationIds.toSorted();
+    const contributorIds = selection.contributor.entries
+      .map((entry) => entry.id)
+      .toSorted();
+    if (
+      selectedIds.length !== contributorIds.length ||
+      selectedIds.some((id, index) => id !== contributorIds[index])
+    ) {
+      throw new Error(
+        "人物の配点明細とサンキーダイアグラムの経路が一致しません。",
+      );
+    }
   }
 
   return {
@@ -241,7 +265,6 @@ function collectWorkstreamFlows(
   builder: FlowGraphBuilder,
   workstream: WorkstreamScore,
   result: LeaderboardResult,
-  selectedLogin: string,
 ): void {
   assertWorkstreamConservation(workstream);
   const pullByKey = new Map(
@@ -276,7 +299,11 @@ function collectWorkstreamFlows(
         allocation,
         "workstream:" + workstream.key,
         result,
-        selectedLogin,
+        allocationMatchesWorkstreamSelection(
+          builder.selection,
+          workstream,
+          allocation,
+        ),
       );
       issueAllocations.push(allocation);
       continue;
@@ -299,7 +326,11 @@ function collectWorkstreamFlows(
       allocation,
       "workstream:" + workstream.key,
       result,
-      selectedLogin,
+      allocationMatchesWorkstreamSelection(
+        builder.selection,
+        workstream,
+        allocation,
+      ),
     );
   }
 
@@ -325,8 +356,12 @@ function collectWorkstreamFlows(
     const pullId = addReferenceNode(builder, pullReference, pull.title);
     for (const allocation of issueAllocations) {
       const points = allocation.points * (pull.mass / totalMass);
-      const selected =
-        allocation.actor.login.toLowerCase() === selectedLogin;
+      const selected = issueInputMatchesSelection(
+        builder.selection,
+        workstream,
+        pull.key,
+        allocation,
+      );
       addFlowLink(builder, {
         id:
           "issue-input:" +
@@ -360,10 +395,9 @@ function addAllocationLink(
   allocation: ScoreAllocation,
   scopeId: string,
   result: LeaderboardResult,
-  selectedLogin: string,
+  selected: boolean,
 ): void {
-  const selected = allocation.actor.login.toLowerCase() === selectedLogin;
-  const actorId = addActorNode(builder, allocation.actor, selected);
+  const actorId = addActorNode(builder, allocation.actor);
   addFlowLink(builder, {
     id: "allocation:" + scopeId + ":" + allocation.id,
     sourceId,
@@ -382,7 +416,7 @@ function addAllocationLink(
     href: sourceHref(allocation.source, result.range),
   });
   builder.allocationCount += 1;
-  if (selected) {
+  if (builder.selection.type === "contributor" && selected) {
     builder.selectedAllocationIds.push(allocation.id);
   }
 }
@@ -416,7 +450,7 @@ function addReferenceNode(
     role: reference.type,
     reference,
     title,
-    selected: false,
+    selected: referenceMatchesSelection(builder.selection, reference),
   });
   return id;
 }
@@ -424,9 +458,9 @@ function addReferenceNode(
 function addActorNode(
   builder: FlowGraphBuilder,
   actor: Actor,
-  selected: boolean,
 ): string {
   const id = actorNodeId(actor.login);
+  const selected = actorMatchesSelection(builder.selection, actor);
   const current = builder.nodes.get(id);
   if (current != null) {
     if (current.role !== "actor") {
@@ -567,7 +601,7 @@ function createDiagramNodes(
       y: layout.y,
       width: layout.width,
       height: layout.height,
-      selected: false,
+      selected: layout.flow.selected,
       href: sourceHref(layout.flow.reference, result.range),
     };
   });
@@ -756,6 +790,156 @@ function hasAllocationFor(
   return allocations.some(
     (allocation) => allocation.actor.login.toLowerCase() === login,
   );
+}
+
+function selectionMatchesWorkstream(
+  selection: SankeyDiagramSelection,
+  workstream: WorkstreamScore,
+): boolean {
+  switch (selection.type) {
+    case "contributor":
+      return hasAllocationFor(
+        workstream.allocations,
+        selection.contributor.login.toLowerCase(),
+      );
+    case "pull":
+      return workstream.pulls.some(
+        (pull) => pull.key.toLowerCase() === selection.key.toLowerCase(),
+      );
+    case "issue":
+      return (
+        workstream.issue?.key.toLowerCase() === selection.key.toLowerCase()
+      );
+    default:
+      throw new UnreachableError(selection);
+  }
+}
+
+function selectionMatchesStandaloneIssue(
+  selection: SankeyDiagramSelection,
+  issueKey: string,
+  allocations: ScoreAllocation[],
+): boolean {
+  switch (selection.type) {
+    case "contributor":
+      return hasAllocationFor(
+        allocations,
+        selection.contributor.login.toLowerCase(),
+      );
+    case "pull":
+      return false;
+    case "issue":
+      return issueKey.toLowerCase() === selection.key.toLowerCase();
+    default:
+      throw new UnreachableError(selection);
+  }
+}
+
+function allocationMatchesWorkstreamSelection(
+  selection: SankeyDiagramSelection,
+  workstream: WorkstreamScore,
+  allocation: ScoreAllocation,
+): boolean {
+  switch (selection.type) {
+    case "contributor":
+      return (
+        allocation.actor.login.toLowerCase() ===
+        selection.contributor.login.toLowerCase()
+      );
+    case "pull":
+      if (allocation.kind === "issue") {
+        return selectionMatchesWorkstream(selection, workstream);
+      }
+      return (
+        allocation.source.type === "pull" &&
+        allocation.source.key.toLowerCase() === selection.key.toLowerCase()
+      );
+    case "issue":
+      return selectionMatchesWorkstream(selection, workstream);
+    default:
+      throw new UnreachableError(selection);
+  }
+}
+
+function issueInputMatchesSelection(
+  selection: SankeyDiagramSelection,
+  workstream: WorkstreamScore,
+  pullKey: string,
+  allocation: ScoreAllocation,
+): boolean {
+  switch (selection.type) {
+    case "contributor":
+      return (
+        allocation.actor.login.toLowerCase() ===
+        selection.contributor.login.toLowerCase()
+      );
+    case "pull":
+      return pullKey.toLowerCase() === selection.key.toLowerCase();
+    case "issue":
+      return selectionMatchesWorkstream(selection, workstream);
+    default:
+      throw new UnreachableError(selection);
+  }
+}
+
+function allocationMatchesStandaloneSelection(
+  selection: SankeyDiagramSelection,
+  issueKey: string,
+  allocation: ScoreAllocation,
+): boolean {
+  switch (selection.type) {
+    case "contributor":
+      return (
+        allocation.actor.login.toLowerCase() ===
+        selection.contributor.login.toLowerCase()
+      );
+    case "pull":
+      return false;
+    case "issue":
+      return issueKey.toLowerCase() === selection.key.toLowerCase();
+    default:
+      throw new UnreachableError(selection);
+  }
+}
+
+function referenceMatchesSelection(
+  selection: SankeyDiagramSelection,
+  reference: SourceReference,
+): boolean {
+  switch (selection.type) {
+    case "contributor":
+      return false;
+    case "pull":
+      return (
+        reference.type === "pull" &&
+        reference.key.toLowerCase() === selection.key.toLowerCase()
+      );
+    case "issue":
+      return (
+        reference.type === "issue" &&
+        reference.key.toLowerCase() === selection.key.toLowerCase()
+      );
+    default:
+      throw new UnreachableError(selection);
+  }
+}
+
+function actorMatchesSelection(
+  selection: SankeyDiagramSelection,
+  actor: Actor,
+): boolean {
+  switch (selection.type) {
+    case "contributor":
+      return (
+        actor.login.toLowerCase() ===
+        selection.contributor.login.toLowerCase()
+      );
+    case "pull":
+    case "issue":
+      return false;
+    default:
+      throw new UnreachableError(selection);
+  }
 }
 
 function referenceNodeId(reference: SourceReference): string {

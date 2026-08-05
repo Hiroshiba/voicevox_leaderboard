@@ -2,6 +2,7 @@ import { UnreachableError } from "./errors.ts";
 import type {
   ContributionKind,
   FileScore,
+  PreparedPull,
   ScoreAllocation,
   WorkstreamScore,
 } from "./model.ts";
@@ -24,6 +25,33 @@ export interface ImportanceInput {
   repositoryCount: number;
   conventionalBonus: number;
 }
+
+type ImplementationReviewAssurance =
+  | {
+      type: "approved";
+      creditRatio: 1;
+      label: string;
+    }
+  | {
+      type: "substantiveReview";
+      creditRatio: 1;
+      label: string;
+    }
+  | {
+      type: "independentMerge";
+      creditRatio: 1;
+      label: string;
+    }
+  | {
+      type: "changesRequested";
+      creditRatio: 0.5;
+      label: string;
+    }
+  | {
+      type: "unreviewed";
+      creditRatio: 0.5;
+      label: string;
+    };
 
 const generatedPathPatterns = [
   /(?:^|\/)(?:vendor|vendors|third_party|node_modules|dist|generated)(?:\/|$)/i,
@@ -74,6 +102,101 @@ export function calculateImportance(input: ImportanceInput): number {
       Math.log2(input.repositoryCount) +
       input.conventionalBonus,
   );
+}
+
+/** PR の独立したレビュー保証と実装枠の配分率を決める。 */
+export function calculateImplementationReviewAssurance(
+  pull: PreparedPull,
+): ImplementationReviewAssurance {
+  const authorLogin = pull.author.login.toLowerCase();
+  const isIndependent = (login: string): boolean =>
+    login.toLowerCase() !== authorLogin;
+  const independentReviews = pull.reviews.filter(
+    (review) =>
+      isTimestampAtOrBefore(review.submittedAt, pull.mergedAt) &&
+      isIndependent(review.actor.login),
+  );
+  const latestDecisions = new Map<
+    string,
+    PreparedPull["reviews"][number]
+  >();
+  for (const review of independentReviews) {
+    if (review.state === "COMMENTED") {
+      continue;
+    }
+    const key = review.actor.login.toLowerCase();
+    const current = latestDecisions.get(key);
+    if (current == null || current.submittedAt < review.submittedAt) {
+      latestDecisions.set(key, review);
+    }
+  }
+
+  const decisions = [...latestDecisions.values()];
+  const hasChangesRequested = decisions.some(
+    (review) => review.state === "CHANGES_REQUESTED",
+  );
+  const hasApproval = decisions.some(
+    (review) => review.state === "APPROVED",
+  );
+  const hasSubstantiveReview =
+    independentReviews.some((review) => review.hasSubstantiveSummary) ||
+    pull.reviewThreads.some(
+      (thread) =>
+        isTimestampAtOrBefore(thread.createdAt, pull.mergedAt) &&
+        isIndependent(thread.actor.login),
+    );
+  const hasIndependentMerger =
+    pull.mergedByIsHuman && isIndependent(pull.mergedBy.login);
+
+  if (hasChangesRequested) {
+    if (hasIndependentMerger) {
+      return {
+        type: "independentMerge",
+        creditRatio: 1,
+        label: "作者以外の人間によるマージ",
+      };
+    }
+    return {
+      type: "changesRequested",
+      creditRatio: 0.5,
+      label: "未承認の変更要求あり",
+    };
+  }
+  if (hasApproval) {
+    return {
+      type: "approved",
+      creditRatio: 1,
+      label: "作者以外の人間による承認あり",
+    };
+  }
+  if (hasSubstantiveReview) {
+    return {
+      type: "substantiveReview",
+      creditRatio: 1,
+      label: "作者以外の人間による実質レビューあり",
+    };
+  }
+  if (hasIndependentMerger) {
+    return {
+      type: "independentMerge",
+      creditRatio: 1,
+      label: "作者以外の人間によるマージ",
+    };
+  }
+  return {
+    type: "unreviewed",
+    creditRatio: 0.5,
+    label: "独立した品質確認なし",
+  };
+}
+
+function isTimestampAtOrBefore(timestamp: string, end: string): boolean {
+  const timestampValue = Date.parse(timestamp);
+  const endValue = Date.parse(end);
+  if (Number.isNaN(timestampValue) || Number.isNaN(endValue)) {
+    throw new Error("レビュー保証の日時を解釈できません。");
+  }
+  return timestampValue <= endValue;
 }
 
 /** PR の最終タイトルと本文から Conventional Commits 補正を決める。 */

@@ -85,11 +85,13 @@ defineProps<{
         <div class="mt-5 grid gap-5 lg:grid-cols-3">
           <div>
             <p class="font-semibold text-emerald-800">
-              実装 65%
+              実装 最大 65%
             </p>
             <p class="mt-2 text-sm leading-7 text-muted">
               PR の実装質量に比例して分けます。共同作者がいなければ作者へ全量を配点します。
               共同作者がいる場合は作者へ 70%、共同作者全体へ 30%を配点します。
+              マージまでに作者以外の人間による承認、実質レビュー、マージのいずれかがあれば、実装枠を全量配分します。
+              独立した品質確認がない場合と、未承認の変更要求が残ったまま作者がマージした場合は、実装枠の 50%だけを配分します。
             </p>
           </div>
           <div>
@@ -112,9 +114,22 @@ defineProps<{
             </p>
           </div>
         </div>
+        <div class="mt-5 rounded-2xl bg-ink px-5 py-4 text-white">
+          <p class="overflow-x-auto font-mono text-sm leading-7 whitespace-nowrap">
+            実装配分枠 = 0.65 I × A
+          </p>
+          <p class="mt-1 text-sm leading-6 text-white/70">
+            A は独立した品質確認があれば 1、なければ 0.5 です。
+          </p>
+        </div>
         <p class="mt-5 rounded-xl bg-paper/70 p-4 text-sm leading-7 text-muted">
           Bot 作者分、配点対象レビューがない枠、関連 Issue がない枠などは未配分です。
           未配分点は人物の順位へ加えません。
+        </p>
+        <p class="mt-4 text-sm leading-7 text-muted">
+          AI 利用の記載や推定結果は係数に使いません。
+          AI 支援かどうかにかかわらず、独立した人間の品質確認を同じ条件で評価します。
+          Bot レビューは品質確認に数えません。
         </p>
       </section>
 

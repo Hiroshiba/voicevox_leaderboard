@@ -12,7 +12,7 @@ const carol = actor("carol");
 const dave = actor("dave");
 
 const dataset: LeaderboardDataset = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   organization: "VOICEVOX",
   generatedAt: "2026-08-02T00:00:00Z",
   range: {
@@ -207,6 +207,44 @@ describe("calculateLeaderboard", () => {
     ]);
   });
 
+  it("独立した品質確認がない実装枠の半分を未配分にする", () => {
+    const unreviewedPull: PreparedPull = {
+      ...pull(3, "2026-07-15T00:00:00Z"),
+      mergedBy: alice,
+      reviews: [],
+      reviewThreads: [],
+      issueKey: undefined,
+    };
+    const unreviewedDataset: LeaderboardDataset = {
+      ...dataset,
+      pulls: [unreviewedPull],
+      issues: [],
+    };
+
+    const result = calculateLeaderboard(unreviewedDataset, dataset.range);
+    const workstream = result.workstreams[0];
+    expect(workstream).toBeDefined();
+    if (workstream == null) {
+      throw new Error("検証対象のワークストリームがありません。");
+    }
+
+    expect(workstream.implementationPoints).toBeCloseTo(
+      workstream.importance * 0.325,
+      12,
+    );
+    expect(workstream.unallocatedPoints).toBeCloseTo(
+      workstream.importance * 0.675,
+      12,
+    );
+    const qualityLoss = workstream.unallocatedEntries.find(
+      (entry) =>
+        entry.id ===
+        unreviewedPull.key + ":implementation:review-assurance:unallocated",
+    );
+    expect(qualityLoss?.points).toBeCloseTo(workstream.importance * 0.325, 12);
+    expect(qualityLoss?.reason).toContain("独立した品質確認なし");
+  });
+
   it("Bot 作者へ渡らない実装枠を未配分として残す", () => {
     const botPull: PreparedPull = {
       ...pull(4, "2026-07-15T00:00:00Z"),
@@ -303,6 +341,8 @@ function pull(number: number, mergedAt: string): PreparedPull {
     mergedAt,
     author: alice,
     authorIsHuman: true,
+    mergedBy: bob,
+    mergedByIsHuman: true,
     coauthors: [],
     files: [
       {
@@ -321,6 +361,7 @@ function pull(number: number, mergedAt: string): PreparedPull {
       {
         actor: bob,
         submittedAt: mergedAt,
+        state: "APPROVED",
         hasSubstantiveSummary: true,
       },
     ],

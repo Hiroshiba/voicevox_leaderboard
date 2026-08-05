@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { z } from "zod";
+import { isAutomatedAccountLogin } from "../src/domain/actors.ts";
 import { leaderboardDatasetSchema } from "../src/domain/dataset.ts";
 import { assertNonNullable } from "../src/domain/errors.ts";
 import {
@@ -16,6 +17,7 @@ import type {
   LeaderboardDataset,
   PreparedIssue,
   PreparedPull,
+  PreparedReviewState,
 } from "../src/domain/model.ts";
 import {
   extractClosingReferences,
@@ -31,7 +33,7 @@ import {
 
 const organization = "VOICEVOX";
 const githubApiBaseUrl = "https://api.github.com";
-const cacheFormatVersion = 1;
+const cacheFormatVersion = 2;
 const coreConcurrency = 8;
 const searchIntervalMilliseconds = 2100;
 const retryableStatuses = new Set([429, 502, 503, 504]);
@@ -90,6 +92,7 @@ const pullSchema = z.object({
   body: z.string().nullable(),
   html_url: z.string().url(),
   user: userSchema.nullable(),
+  merged_by: userSchema.nullable(),
   merged_at: z.string().datetime().nullable(),
   additions: z.number().int().nonnegative(),
   deletions: z.number().int().nonnegative(),
@@ -836,7 +839,7 @@ async function main(): Promise<void> {
   );
 
   const dataset: LeaderboardDataset = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     organization,
     generatedAt: new Date().toISOString(),
     range: options.range,
@@ -981,6 +984,12 @@ function preparePull(
     createKey(bundle.repository, bundle.pull.number) +
       " の作者を取得できません。",
   );
+  const mergedBy = bundle.pull.merged_by;
+  assertNonNullable(
+    mergedBy,
+    createKey(bundle.repository, bundle.pull.number) +
+      " はマージ済みですがマージ者を取得できません。",
+  );
   const files = bundle.files.map(calculateFileScore);
   const effectiveLines = sum(files.map((file) => file.effectiveLines));
   const nonGeneratedFiles = files.filter((file) => file.generated === false).length;
@@ -994,6 +1003,8 @@ function preparePull(
     mergedAt,
     author: toActor(author),
     authorIsHuman: isHumanUser(author),
+    mergedBy: toActor(mergedBy),
+    mergedByIsHuman: isHumanUser(mergedBy),
     coauthors: extractCoauthors(bundle.commits, author.login),
     files,
     effectiveLines,
@@ -1021,6 +1032,7 @@ function preparePull(
         return {
           actor: toActor(user),
           submittedAt,
+          state: parsePreparedReviewState(review.state),
           hasSubstantiveSummary:
             review.body != null && isSubstantiveReviewText(review.body),
         };
@@ -1046,6 +1058,19 @@ function preparePull(
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
     ...(resolvedIssue == null ? {} : { issueKey: resolvedIssue.key }),
   };
+}
+
+function parsePreparedReviewState(state: string): PreparedReviewState {
+  switch (state.toUpperCase()) {
+    case "APPROVED":
+      return "APPROVED";
+    case "CHANGES_REQUESTED":
+      return "CHANGES_REQUESTED";
+    case "COMMENTED":
+      return "COMMENTED";
+    default:
+      throw new Error("採点対象外のレビュー状態です: " + state);
+  }
 }
 
 function prepareIssue(
@@ -1102,7 +1127,7 @@ function extractCoauthors(
     )) {
       const login = match[1];
       assertNonNullable(login, "共同作者の GitHub ログインを取得できません。");
-      if (isBotLogin(login) === false) {
+      if (isAutomatedAccountLogin(login) === false) {
         addCoauthor(actors, actorFromLogin(login), pullAuthorLogin);
       }
     }
@@ -1138,11 +1163,10 @@ function actorFromLogin(login: string): Actor {
 }
 
 function isHumanUser(user: GithubUser): boolean {
-  return user.type === "User" && isBotLogin(user.login) === false;
-}
-
-function isBotLogin(login: string): boolean {
-  return /\[bot\]$|(?:^|[-_])bot$/i.test(login);
+  return (
+    user.type === "User" &&
+    isAutomatedAccountLogin(user.login) === false
+  );
 }
 
 function parseCliOptions(arguments_: string[]): CliOptions {

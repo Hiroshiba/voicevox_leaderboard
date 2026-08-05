@@ -17,6 +17,7 @@ import type {
   WorkstreamScore,
 } from "../domain/model.ts";
 import {
+  calculateImplementationReviewAssurance,
   calculateImportance,
   calculateStandaloneIssueScore,
   totalAllocations,
@@ -240,6 +241,8 @@ function allocateImplementation(
   const unallocatedEntries: UnallocatedScore[] = [];
   for (const pull of group.pulls) {
     const pullPool = 0.65 * importance * (pull.mass / totalMass);
+    const reviewAssurance = calculateImplementationReviewAssurance(pull);
+    const distributablePullPool = pullPool * reviewAssurance.creditRatio;
     const source = createPullSource(pull);
     const sourceTitle = createPullTitle(pull);
     const reason =
@@ -248,7 +251,27 @@ function allocateImplementation(
       pull.number +
       " の実装質量 " +
       pull.mass.toFixed(2) +
-      " による配分";
+      " による配分、" +
+      reviewAssurance.label +
+      "として実装枠の" +
+      reviewAssurance.creditRatio * 100 +
+      "%を配分";
+    const qualityUnallocatedPoints = pullPool - distributablePullPool;
+    if (qualityUnallocatedPoints > 0) {
+      unallocatedEntries.push(
+        createUnallocatedScore(
+          pull.key + ":implementation:review-assurance:unallocated",
+          "implementation",
+          qualityUnallocatedPoints,
+          source,
+          sourceTitle,
+          reviewAssurance.label +
+            "のため実装枠の" +
+            (1 - reviewAssurance.creditRatio) * 100 +
+            "%を未配分",
+        ),
+      );
+    }
     const authorRatio = pull.coauthors.length > 0 ? 0.7 : 1;
     if (pull.authorIsHuman) {
       allocations.push(
@@ -256,7 +279,7 @@ function allocateImplementation(
           pull.key + ":implementation:author",
           pull.author,
           "implementation",
-          pullPool * authorRatio,
+          distributablePullPool * authorRatio,
           source,
           sourceTitle,
           reason,
@@ -267,7 +290,7 @@ function allocateImplementation(
         createUnallocatedScore(
           pull.key + ":implementation:author:unallocated",
           "implementation",
-          pullPool * authorRatio,
+          distributablePullPool * authorRatio,
           source,
           sourceTitle,
           pull.author.login + " が Bot のため作者分を未配分",
@@ -276,7 +299,7 @@ function allocateImplementation(
     }
 
     if (pull.coauthors.length > 0) {
-      const coauthorPool = pullPool * 0.3;
+      const coauthorPool = distributablePullPool * 0.3;
       for (const coauthor of pull.coauthors) {
         allocations.push(
           createAllocation(

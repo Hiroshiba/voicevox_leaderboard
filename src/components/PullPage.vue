@@ -7,7 +7,10 @@ import type {
   PreparedPull,
   WorkstreamScore,
 } from "../domain/model.ts";
-import { contributionKindLabel } from "../domain/scoring.ts";
+import {
+  calculateImplementationReviewAssurance,
+  contributionKindLabel,
+} from "../domain/scoring.ts";
 import { routeHref } from "../services/routes.ts";
 import type { SankeyDiagramSelection } from "../services/sankeyDiagram.ts";
 import SankeyDiagram from "./SankeyDiagram.vue";
@@ -27,6 +30,9 @@ const sankeySelection = computed<SankeyDiagramSelection>(() => ({
 const hasSankeyData = computed(
   () =>
     props.workstream != null && props.workstream.allocations.length > 0,
+);
+const reviewAssurance = computed(() =>
+  calculateImplementationReviewAssurance(props.pull),
 );
 
 function formatScore(score: number): string {
@@ -134,6 +140,16 @@ function kindClass(kind: ContributionKind): string {
           </dd>
         </div>
       </dl>
+      <div class="mt-4 rounded-xl bg-paper/70 px-4 py-3 text-sm leading-6 text-muted">
+        <p>
+          <span class="font-semibold text-ink">レビュー保証</span>
+          {{ reviewAssurance.label }}
+        </p>
+        <p>
+          この PR に割り当てられた実装枠の
+          {{ reviewAssurance.creditRatio * 100 }}%を作者と共同作者へ配分します。
+        </p>
+      </div>
     </article>
 
     <section

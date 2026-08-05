@@ -43,11 +43,6 @@ type ImplementationReviewAssurance =
       label: string;
     }
   | {
-      type: "changesRequested";
-      creditRatio: 0.5;
-      label: string;
-    }
-  | {
       type: "unreviewed";
       creditRatio: 0.5;
       label: string;
@@ -116,26 +111,7 @@ export function calculateImplementationReviewAssurance(
       isTimestampAtOrBefore(review.submittedAt, pull.mergedAt) &&
       isIndependent(review.actor.login),
   );
-  const latestDecisions = new Map<
-    string,
-    PreparedPull["reviews"][number]
-  >();
-  for (const review of independentReviews) {
-    if (review.state === "COMMENTED") {
-      continue;
-    }
-    const key = review.actor.login.toLowerCase();
-    const current = latestDecisions.get(key);
-    if (current == null || current.submittedAt < review.submittedAt) {
-      latestDecisions.set(key, review);
-    }
-  }
-
-  const decisions = [...latestDecisions.values()];
-  const hasChangesRequested = decisions.some(
-    (review) => review.state === "CHANGES_REQUESTED",
-  );
-  const hasApproval = decisions.some(
+  const hasApproval = independentReviews.some(
     (review) => review.state === "APPROVED",
   );
   const hasSubstantiveReview =
@@ -148,20 +124,6 @@ export function calculateImplementationReviewAssurance(
   const hasIndependentMerger =
     pull.mergedByIsHuman && isIndependent(pull.mergedBy.login);
 
-  if (hasChangesRequested) {
-    if (hasIndependentMerger) {
-      return {
-        type: "independentMerge",
-        creditRatio: 1,
-        label: "作者以外の人間によるマージ",
-      };
-    }
-    return {
-      type: "changesRequested",
-      creditRatio: 0.5,
-      label: "未承認の変更要求あり",
-    };
-  }
   if (hasApproval) {
     return {
       type: "approved",

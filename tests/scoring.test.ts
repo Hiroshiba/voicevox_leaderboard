@@ -178,27 +178,31 @@ describe("calculateImplementationReviewAssurance", () => {
     });
   });
 
-  it("最後のレビューが変更要求ならセルフマージの実装枠を半分にする", () => {
-    const pull: PreparedPull = {
+  it("未承認の変更要求が残っていても実質レビュー済みなら実装枠を全量にする", () => {
+    const assurance = calculateImplementationReviewAssurance({
       ...basePull,
       reviews: [
-        review(bob, "APPROVED", false, "2026-07-08T00:00:00Z"),
         review(bob, "CHANGES_REQUESTED", true, "2026-07-09T00:00:00Z"),
       ],
-    };
-
-    expect(calculateImplementationReviewAssurance(pull)).toMatchObject({
-      type: "changesRequested",
-      creditRatio: 0.5,
     });
-    expect(
-      calculateImplementationReviewAssurance({
-        ...pull,
-        mergedBy: bob,
-      }),
-    ).toMatchObject({
-      type: "independentMerge",
+
+    expect(assurance).toMatchObject({
+      type: "substantiveReview",
       creditRatio: 1,
+    });
+  });
+
+  it("実質内容のない変更要求だけなら独立した品質確認なしとして扱う", () => {
+    const assurance = calculateImplementationReviewAssurance({
+      ...basePull,
+      reviews: [
+        review(bob, "CHANGES_REQUESTED", false, "2026-07-09T00:00:00Z"),
+      ],
+    });
+
+    expect(assurance).toMatchObject({
+      type: "unreviewed",
+      creditRatio: 0.5,
     });
   });
 

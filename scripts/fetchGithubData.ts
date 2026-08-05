@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { z } from "zod";
+import { isAutomatedAccountLogin } from "../src/domain/actors.ts";
 import { leaderboardDatasetSchema } from "../src/domain/dataset.ts";
 import { assertNonNullable } from "../src/domain/errors.ts";
 import {
@@ -1126,7 +1127,7 @@ function extractCoauthors(
     )) {
       const login = match[1];
       assertNonNullable(login, "共同作者の GitHub ログインを取得できません。");
-      if (isBotLogin(login) === false) {
+      if (isAutomatedAccountLogin(login) === false) {
         addCoauthor(actors, actorFromLogin(login), pullAuthorLogin);
       }
     }
@@ -1162,11 +1163,10 @@ function actorFromLogin(login: string): Actor {
 }
 
 function isHumanUser(user: GithubUser): boolean {
-  return user.type === "User" && isBotLogin(user.login) === false;
-}
-
-function isBotLogin(login: string): boolean {
-  return /\[bot\]$|(?:^|[-_])bot$/i.test(login);
+  return (
+    user.type === "User" &&
+    isAutomatedAccountLogin(user.login) === false
+  );
 }
 
 function parseCliOptions(arguments_: string[]): CliOptions {

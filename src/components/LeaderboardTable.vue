@@ -1,11 +1,26 @@
 <script setup lang="ts">
+import { computed } from "vue";
+import { assertNonNullable } from "../domain/errors.ts";
 import type { LeaderboardResult } from "../domain/model.ts";
 import { routeHref } from "../services/routes.ts";
 import ScoreBreakdownBar from "./ScoreBreakdownBar.vue";
 
-defineProps<{
+const props = defineProps<{
   result: LeaderboardResult;
 }>();
+
+const maximumContributorPoints = computed(() => {
+  const firstContributor = props.result.contributors[0];
+  assertNonNullable(
+    firstContributor,
+    "最大点の算出対象となる貢献者がいません。",
+  );
+  return props.result.contributors.reduce(
+    (maximumPoints, contributor) =>
+      Math.max(maximumPoints, contributor.score),
+    firstContributor.score,
+  );
+});
 
 function formatScore(score: number): string {
   return score.toFixed(2);
@@ -98,6 +113,7 @@ function formatScore(score: number): string {
                   issuePoints: contributor.issuePoints,
                 }"
                 density="compact"
+                :maximum-points="maximumContributorPoints"
               />
             </td>
             <td class="px-5 py-4 text-right font-display text-xl font-semibold text-accent-dark">

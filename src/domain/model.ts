@@ -32,9 +32,15 @@ export interface FileScore {
   generated: boolean;
 }
 
+export type PreparedReviewState =
+  | "APPROVED"
+  | "CHANGES_REQUESTED"
+  | "COMMENTED";
+
 export interface PreparedReview {
   actor: Actor;
   submittedAt: string;
+  state: PreparedReviewState;
   hasSubstantiveSummary: boolean;
 }
 
@@ -52,6 +58,8 @@ export interface PreparedPull {
   mergedAt: string;
   author: Actor;
   authorIsHuman: boolean;
+  mergedBy: Actor;
+  mergedByIsHuman: boolean;
   coauthors: Actor[];
   files: FileScore[];
   effectiveLines: number;
@@ -97,7 +105,7 @@ export interface AcquisitionStats {
 }
 
 export interface LeaderboardDataset {
-  schemaVersion: 1;
+  schemaVersion: 2;
   organization: "VOICEVOX";
   generatedAt: string;
   range: DateRange;

@@ -94,6 +94,8 @@ const pull: PreparedPull = {
   mergedAt: "2026-07-10T00:00:00Z",
   author: alice,
   authorIsHuman: true,
+  mergedBy: bob,
+  mergedByIsHuman: true,
   coauthors: [],
   files: [],
   effectiveLines: 20,

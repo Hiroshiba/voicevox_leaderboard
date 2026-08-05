@@ -12,7 +12,7 @@ const carol = actor("carol");
 const dave = actor("dave");
 
 const dataset: LeaderboardDataset = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   organization: "VOICEVOX",
   generatedAt: "2026-08-02T00:00:00Z",
   range: {
@@ -303,6 +303,8 @@ function pull(number: number, mergedAt: string): PreparedPull {
     mergedAt,
     author: alice,
     authorIsHuman: true,
+    mergedBy: bob,
+    mergedByIsHuman: true,
     coauthors: [],
     files: [
       {
@@ -321,6 +323,7 @@ function pull(number: number, mergedAt: string): PreparedPull {
       {
         actor: bob,
         submittedAt: mergedAt,
+        state: "APPROVED",
         hasSubstantiveSummary: true,
       },
     ],

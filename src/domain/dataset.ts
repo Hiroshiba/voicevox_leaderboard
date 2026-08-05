@@ -35,6 +35,8 @@ const preparedPullSchema = z.object({
   mergedAt: dateTimeSchema,
   author: actorSchema,
   authorIsHuman: z.boolean(),
+  mergedBy: actorSchema,
+  mergedByIsHuman: z.boolean(),
   coauthors: z.array(actorSchema),
   files: z.array(fileScoreSchema),
   effectiveLines: z.number().nonnegative(),
@@ -45,6 +47,7 @@ const preparedPullSchema = z.object({
     z.object({
       actor: actorSchema,
       submittedAt: dateTimeSchema,
+      state: z.enum(["APPROVED", "CHANGES_REQUESTED", "COMMENTED"]),
       hasSubstantiveSummary: z.boolean(),
     }),
   ),
@@ -83,7 +86,7 @@ const preparedIssueSchema = z.object({
 });
 
 export const leaderboardDatasetSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   organization: z.literal("VOICEVOX"),
   generatedAt: dateTimeSchema,
   range: z.object({

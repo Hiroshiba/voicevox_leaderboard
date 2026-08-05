@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { DateRange, PreparedIssue } from "../domain/model.ts";
+import type { RangeSelection } from "../services/calculationScope.ts";
 import { routeHref } from "../services/routes.ts";
 
 const props = defineProps<{
   issues: PreparedIssue[];
   range: DateRange;
+  rangeSelection: RangeSelection;
 }>();
 
 const sortedIssues = computed(() =>
@@ -68,7 +70,7 @@ function formatDate(value: string): string {
         class="border-b border-line last:border-b-0"
       >
         <a
-          :href="routeHref({ name: 'issue', key: issue.key }, range)"
+          :href="routeHref({ name: 'issue', key: issue.key }, rangeSelection)"
           class="grid gap-3 px-5 py-4 hover:bg-paper/55 md:grid-cols-[minmax(0,1fr)_10rem_9rem] md:items-center"
         >
           <div class="min-w-0">

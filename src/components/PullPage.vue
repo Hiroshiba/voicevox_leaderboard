@@ -11,6 +11,7 @@ import {
   calculateImplementationReviewAssurance,
   contributionKindLabel,
 } from "../domain/scoring.ts";
+import type { RangeSelection } from "../services/calculationScope.ts";
 import { routeHref } from "../services/routes.ts";
 import type { SankeyDiagramSelection } from "../services/sankeyDiagram.ts";
 import SankeyDiagram from "./SankeyDiagram.vue";
@@ -21,6 +22,7 @@ const props = defineProps<{
   workstream?: WorkstreamScore | undefined;
   range: DateRange;
   result: LeaderboardResult;
+  rangeSelection: RangeSelection;
 }>();
 
 const sankeySelection = computed<SankeyDiagramSelection>(() => ({
@@ -67,7 +69,7 @@ function kindClass(kind: ContributionKind): string {
 <template>
   <main class="mx-auto max-w-6xl px-5 py-8 sm:px-8 sm:py-12">
     <a
-      :href="routeHref({ name: 'home' }, range)"
+      :href="routeHref({ name: 'home' }, rangeSelection)"
       class="text-sm font-semibold text-accent hover:underline"
     >
       ← リーダーボードへ戻る
@@ -85,7 +87,7 @@ function kindClass(kind: ContributionKind): string {
       </h1>
       <div class="mt-5 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-muted">
         <a
-          :href="routeHref({ name: 'person', login: pull.author.login }, range)"
+          :href="routeHref({ name: 'person', login: pull.author.login }, rangeSelection)"
           class="flex items-center gap-2 font-semibold text-ink hover:text-accent"
         >
           <img
@@ -174,6 +176,7 @@ function kindClass(kind: ContributionKind): string {
         v-if="hasSankeyData"
         :result="result"
         :selection="sankeySelection"
+        :range-selection="rangeSelection"
       />
       <div
         v-else
@@ -206,7 +209,7 @@ function kindClass(kind: ContributionKind): string {
           </h2>
           <a
             v-if="workstream.issue != null"
-            :href="routeHref({ name: 'issue', key: workstream.issue.key }, range)"
+            :href="routeHref({ name: 'issue', key: workstream.issue.key }, rangeSelection)"
             class="mt-2 inline-block text-sm font-semibold text-accent hover:underline"
           >
             関連 Issue {{ workstream.issue.repository }}#{{ workstream.issue.number }} を見る
@@ -261,7 +264,7 @@ function kindClass(kind: ContributionKind): string {
           </span>
           <div>
             <a
-              :href="routeHref({ name: 'person', login: allocation.actor.login }, range)"
+              :href="routeHref({ name: 'person', login: allocation.actor.login }, rangeSelection)"
               class="font-semibold hover:text-accent"
             >
               {{ allocation.actor.login }}

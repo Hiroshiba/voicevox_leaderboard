@@ -1,9 +1,10 @@
 import { z } from "zod";
-import { assertNonNullable } from "../domain/errors.ts";
+import { assertNonNullable, UnreachableError } from "../domain/errors.ts";
+import type { SourceReference } from "../domain/model.ts";
 import type {
-  DateRange,
-  SourceReference,
-} from "../domain/model.ts";
+  RangeSelection,
+  RelativePeriodUnit,
+} from "./calculationScope.ts";
 
 export type AppRoute =
   | { name: "home" }
@@ -17,7 +18,7 @@ export type AppRoute =
 
 export interface AppLocation {
   route: AppRoute;
-  range?: DateRange | undefined;
+  rangeSelection?: RangeSelection | undefined;
 }
 
 const loginSchema = z.string().regex(/^[A-Za-z0-9-]+$/);
@@ -28,6 +29,10 @@ const rangeSchema = z.object({
   start: z.iso.date(),
   end: z.iso.date(),
 });
+const relativePeriodSchema = z
+  .string()
+  .regex(/^[1-9]\d{0,2}[dwm]$/)
+  .transform(parseRelativePeriod);
 const applicationBasePath = normalizeBasePath(import.meta.env.BASE_URL);
 
 /** URL を画面ルートと期間へ変換する。 */
@@ -47,36 +52,33 @@ export function parseAppLocation(location: string): AppLocation {
     .filter((segment) => segment !== "")
     .map(decodeSegment);
   const route = parseRouteSegments(segments);
-  const parsedRange = rangeSchema.safeParse({
-    start: url.searchParams.get("start"),
-    end: url.searchParams.get("end"),
-  });
+  const rangeSelection = parseRangeSelection(url.searchParams);
   return {
     route,
-    ...(parsedRange.success ? { range: parsedRange.data } : {}),
+    ...(rangeSelection == null ? {} : { rangeSelection }),
   };
 }
 
 /** 画面ルートと期間からリンクを作る。 */
-export function routeHref(route: AppRoute, range: DateRange): string {
-  const query = new URLSearchParams({
-    start: range.start,
-    end: range.end,
-  });
+export function routeHref(
+  route: AppRoute,
+  rangeSelection: RangeSelection,
+): string {
+  const query = createRangeQuery(rangeSelection);
   return applicationPath(routePath(route)) + "?" + query.toString();
 }
 
 /** 点数の発生源から詳細ページのリンクを作る。 */
 export function sourceHref(
   source: SourceReference,
-  range: DateRange,
+  rangeSelection: RangeSelection,
 ): string {
   return routeHref(
     {
       name: source.type,
       key: source.key,
     },
-    range,
+    rangeSelection,
   );
 }
 
@@ -140,6 +142,82 @@ function parseRouteSegments(segments: string[]): AppRoute {
     };
   }
   return { name: "notFound" };
+}
+
+function parseRangeSelection(
+  searchParams: URLSearchParams,
+): RangeSelection | undefined {
+  const periodValues = searchParams.getAll("period");
+  const startValues = searchParams.getAll("start");
+  const endValues = searchParams.getAll("end");
+  if (
+    periodValues.length > 1 ||
+    startValues.length > 1 ||
+    endValues.length > 1 ||
+    (periodValues.length === 1 &&
+      (startValues.length > 0 || endValues.length > 0))
+  ) {
+    return undefined;
+  }
+  if (periodValues.length === 1) {
+    const parsedPeriod = relativePeriodSchema.safeParse(periodValues[0]);
+    return parsedPeriod.success ? parsedPeriod.data : undefined;
+  }
+  const parsedRange = rangeSchema.safeParse({
+    start: startValues[0],
+    end: endValues[0],
+  });
+  return parsedRange.success
+    ? { type: "absolute", range: parsedRange.data }
+    : undefined;
+}
+
+function parseRelativePeriod(value: string): RangeSelection {
+  const count = Number(value.slice(0, -1));
+  const unit = value.slice(-1);
+  switch (unit) {
+    case "d":
+      return { type: "relative", count, unit: "day" };
+    case "w":
+      return { type: "relative", count, unit: "week" };
+    case "m":
+      return { type: "relative", count, unit: "month" };
+    default:
+      throw new Error("直近期間の単位を解釈できません: " + unit);
+  }
+}
+
+function createRangeQuery(rangeSelection: RangeSelection): URLSearchParams {
+  switch (rangeSelection.type) {
+    case "absolute":
+      return new URLSearchParams({
+        start: rangeSelection.range.start,
+        end: rangeSelection.range.end,
+      });
+    case "relative":
+      return new URLSearchParams({
+        period:
+          rangeSelection.count.toString() +
+          relativePeriodUnitSuffix(rangeSelection.unit),
+      });
+    default:
+      throw new UnreachableError(rangeSelection);
+  }
+}
+
+function relativePeriodUnitSuffix(
+  unit: RelativePeriodUnit,
+): string {
+  switch (unit) {
+    case "day":
+      return "d";
+    case "week":
+      return "w";
+    case "month":
+      return "m";
+    default:
+      throw new UnreachableError(unit);
+  }
 }
 
 function routePath(route: AppRoute): string {

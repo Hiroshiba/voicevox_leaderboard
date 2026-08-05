@@ -6,6 +6,7 @@ import {
   contributionKindLabel,
   contributionKinds,
 } from "../domain/scoring.ts";
+import type { RangeSelection } from "../services/calculationScope.ts";
 import {
   createSankeyDiagramLayout,
   type SankeyDiagramLink,
@@ -16,10 +17,15 @@ import {
 const props = defineProps<{
   selection: SankeyDiagramSelection;
   result: LeaderboardResult;
+  rangeSelection: RangeSelection;
 }>();
 
 const layout = computed(() =>
-  createSankeyDiagramLayout(props.result, props.selection),
+  createSankeyDiagramLayout(
+    props.result,
+    props.selection,
+    props.rangeSelection,
+  ),
 );
 
 const selectionLabel = computed((): string => {

@@ -254,6 +254,7 @@ function evidenceLabel(kind: EvidenceKind): string {
             issuePoints: standalone.score,
           }"
           density="comfortable"
+          :maximum-points="standalone.score"
         />
       </div>
       <ul class="mt-5 space-y-2">
@@ -321,6 +322,12 @@ function evidenceLabel(kind: EvidenceKind): string {
             unallocatedPoints: workstream.unallocatedPoints,
           }"
           density="comfortable"
+          :maximum-points="
+            workstream.implementationPoints +
+              workstream.reviewPoints +
+              workstream.issuePoints +
+              workstream.unallocatedPoints
+          "
         />
       </div>
 

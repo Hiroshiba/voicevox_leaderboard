@@ -219,6 +219,12 @@ function kindClass(kind: ContributionKind): string {
             unallocatedPoints: workstream.unallocatedPoints,
           }"
           density="comfortable"
+          :maximum-points="
+            workstream.implementationPoints +
+              workstream.reviewPoints +
+              workstream.issuePoints +
+              workstream.unallocatedPoints
+          "
         />
       </div>
 

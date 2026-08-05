@@ -100,6 +100,7 @@ function kindClass(kind: ContributionKind): string {
             issuePoints: contributor.issuePoints,
           }"
           density="comfortable"
+          :maximum-points="contributor.score"
         />
       </div>
     </section>

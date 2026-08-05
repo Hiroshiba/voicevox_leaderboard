@@ -6,6 +6,7 @@ import {
   contributionKindLabel,
   contributionKinds,
 } from "../domain/scoring.ts";
+import { calculateScoreBarPercentage } from "../services/scoreBreakdown.ts";
 
 type ScoreBreakdown =
   | {
@@ -33,6 +34,7 @@ interface BreakdownSegment {
 const props = defineProps<{
   breakdown: ScoreBreakdown;
   density: "compact" | "comfortable";
+  maximumPoints: number;
 }>();
 
 const segments = computed<BreakdownSegment[]>(() => {
@@ -66,6 +68,13 @@ const segments = computed<BreakdownSegment[]>(() => {
 
 const totalPoints = computed(() =>
   sum(segments.value.map((segment) => segment.points)),
+);
+const chartWidth = computed(
+  () =>
+    calculateScoreBarPercentage(
+      totalPoints.value,
+      props.maximumPoints,
+    ).toString() + "%",
 );
 
 const chartLabel = computed(() =>
@@ -120,20 +129,25 @@ function sum(values: number[]): number {
 <template>
   <div>
     <div
-      class="flex w-full overflow-hidden rounded-full bg-line/60"
+      class="w-full overflow-hidden rounded-full bg-line/60"
       :class="density === 'compact' ? 'h-2.5' : 'h-4'"
       role="img"
       :aria-label="chartLabel"
     >
       <div
-        v-for="segment in segments"
-        v-show="segment.points > 0"
-        :key="segment.kind"
-        class="min-w-0 basis-0"
-        :class="segmentClass(segment.kind)"
-        :style="{ flexGrow: segment.points }"
-        :title="segment.label + ' ' + formatScore(segment.points) + ' 点 ' + formatPercentage(segment.points)"
-      />
+        class="flex h-full overflow-hidden rounded-full"
+        :style="{ width: chartWidth }"
+      >
+        <div
+          v-for="segment in segments"
+          v-show="segment.points > 0"
+          :key="segment.kind"
+          class="min-w-0 basis-0"
+          :class="segmentClass(segment.kind)"
+          :style="{ flexGrow: segment.points }"
+          :title="segment.label + ' ' + formatScore(segment.points) + ' 点 ' + formatPercentage(segment.points)"
+        />
+      </div>
     </div>
     <dl
       class="flex flex-wrap gap-x-4 gap-y-1.5 text-muted"

@@ -70,7 +70,8 @@ GitHub Pages で個別ページを直接開けるように、ビルド時に同�
 
 ## デプロイ
 
-`.github/workflows/deploy.yml` を `workflow_dispatch` で実行すると、過去 3 か月のデータを取得して GitHub Pages へデプロイします。
+`.github/workflows/deploy.yml` は毎日日本時間 18 時に開始し、過去 3 か月のデータを取得して GitHub Pages へデプロイします。
+`workflow_dispatch` から手動でも実行できます。
 Workflow は `.cache/github` を Actions cache へ保存し、次回のデプロイで再利用します。
 
 GitHub リポジトリの Pages 設定では Source に GitHub Actions を指定してください。

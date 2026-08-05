@@ -15,6 +15,7 @@ import type {
 } from "../src/domain/model";
 import { parseLeaderboardDataset } from "../src/domain/dataset";
 import { calculateLeaderboard } from "../src/services/calculateLeaderboard";
+import type { RangeSelection } from "../src/services/calculationScope";
 import {
   createSankeyDiagramLayout,
   type SankeyDiagramSelection,
@@ -180,10 +181,18 @@ const result: LeaderboardResult = {
   workstreams: [workstream],
   standaloneIssues: [standalone],
 };
+const rangeSelection = {
+  type: "absolute",
+  range: result.range,
+} satisfies RangeSelection;
 
 describe("createSankeyDiagramLayout", () => {
   it("同じ PR、Issue、人物を一つのノードへまとめる", () => {
-    const layout = createSankeyDiagramLayout(result, contributorSelection);
+    const layout = createSankeyDiagramLayout(
+      result,
+      contributorSelection,
+      rangeSelection,
+    );
     const pullNodes = layout.nodes.filter((node) => node.role === "pull");
     const issueNodes = layout.nodes.filter((node) => node.role === "issue");
     const actorNodes = layout.nodes.filter((node) => node.role === "actor");
@@ -208,7 +217,11 @@ describe("createSankeyDiagramLayout", () => {
   });
 
   it("未配分点をノードにもリンクにも含めない", () => {
-    const layout = createSankeyDiagramLayout(result, contributorSelection);
+    const layout = createSankeyDiagramLayout(
+      result,
+      contributorSelection,
+      rangeSelection,
+    );
     const ids = [
       ...layout.nodes.map((node) => node.id),
       ...layout.links.map((link) => link.id),
@@ -221,7 +234,11 @@ describe("createSankeyDiagramLayout", () => {
   });
 
   it("PR から人物へ直接つなぎ、Issue 経由の配点は中列へつなぐ", () => {
-    const layout = createSankeyDiagramLayout(result, contributorSelection);
+    const layout = createSankeyDiagramLayout(
+      result,
+      contributorSelection,
+      rangeSelection,
+    );
     const pullId = "pull:voicevox/voicevox#1";
     const issueId = "issue:voicevox/voicevox#10";
     const directLink = layout.links.find(
@@ -258,7 +275,11 @@ describe("createSankeyDiagramLayout", () => {
   });
 
   it("配点種別をノードにせずリンクへ保持する", () => {
-    const layout = createSankeyDiagramLayout(result, contributorSelection);
+    const layout = createSankeyDiagramLayout(
+      result,
+      contributorSelection,
+      rangeSelection,
+    );
     const roles = new Set(layout.nodes.map((node) => node.role));
     const kinds = new Set(layout.links.map((link) => link.kind));
 
@@ -272,11 +293,29 @@ describe("createSankeyDiagramLayout", () => {
     ).toBe(true);
   });
 
+  it("直近期間指定をノードとリンクへ引き継ぐ", () => {
+    const layout = createSankeyDiagramLayout(
+      result,
+      contributorSelection,
+      { type: "relative", count: 2, unit: "week" },
+    );
+    const hrefs = [
+      ...layout.nodes.map((node) => node.href),
+      ...layout.links.map((link) => link.href),
+    ];
+
+    expect(hrefs.every((href) => href.endsWith("?period=2w"))).toBe(true);
+  });
+
   it("PR に関係する成果の配点経路を表示する", () => {
-    const layout = createSankeyDiagramLayout(result, {
-      type: "pull",
-      key: pull.key,
-    });
+    const layout = createSankeyDiagramLayout(
+      result,
+      {
+        type: "pull",
+        key: pull.key,
+      },
+      rangeSelection,
+    );
     const selectedNode = layout.nodes.find(
       (node) => node.id === "pull:voicevox/voicevox#1",
     );
@@ -291,10 +330,14 @@ describe("createSankeyDiagramLayout", () => {
   });
 
   it("関連 Issue に関係する全成果の配点経路を表示する", () => {
-    const layout = createSankeyDiagramLayout(result, {
-      type: "issue",
-      key: "voicevox/voicevox#10",
-    });
+    const layout = createSankeyDiagramLayout(
+      result,
+      {
+        type: "issue",
+        key: "voicevox/voicevox#10",
+      },
+      rangeSelection,
+    );
     const selectedNode = layout.nodes.find(
       (node) => node.id === "issue:voicevox/voicevox#10",
     );
@@ -307,10 +350,14 @@ describe("createSankeyDiagramLayout", () => {
   });
 
   it("独立 Issue から人物への配点経路を表示する", () => {
-    const layout = createSankeyDiagramLayout(result, {
-      type: "issue",
-      key: standalone.key,
-    });
+    const layout = createSankeyDiagramLayout(
+      result,
+      {
+        type: "issue",
+        key: standalone.key,
+      },
+      rangeSelection,
+    );
     const issueNode = layout.nodes.find(
       (node) => node.id === "issue:voicevox/voicevox#20",
     );
@@ -335,7 +382,11 @@ describe("createSankeyDiagramLayout", () => {
     };
 
     expect(() =>
-      createSankeyDiagramLayout(invalidResult, contributorSelection),
+      createSankeyDiagramLayout(
+        invalidResult,
+        contributorSelection,
+        rangeSelection,
+      ),
     ).toThrow("総量と詳細経路の合計が一致しません");
   });
 
@@ -348,24 +399,36 @@ describe("createSankeyDiagramLayout", () => {
     );
     const dataset = parseLeaderboardDataset(raw);
     const actualResult = calculateLeaderboard(dataset, dataset.range);
+    const actualRangeSelection = {
+      type: "absolute",
+      range: actualResult.range,
+    } satisfies RangeSelection;
     const issueKeys = new Set<string>();
     let pullCount = 0;
 
     for (const actualContributor of actualResult.contributors) {
-      createSankeyDiagramLayout(actualResult, {
-        type: "contributor",
-        contributor: actualContributor,
-      });
+      createSankeyDiagramLayout(
+        actualResult,
+        {
+          type: "contributor",
+          contributor: actualContributor,
+        },
+        actualRangeSelection,
+      );
     }
     for (const actualWorkstream of actualResult.workstreams) {
       if (actualWorkstream.allocations.length === 0) {
         continue;
       }
       for (const actualPull of actualWorkstream.pulls) {
-        createSankeyDiagramLayout(actualResult, {
-          type: "pull",
-          key: actualPull.key,
-        });
+        createSankeyDiagramLayout(
+          actualResult,
+          {
+            type: "pull",
+            key: actualPull.key,
+          },
+          actualRangeSelection,
+        );
         pullCount += 1;
       }
       if (actualWorkstream.issue != null) {
@@ -376,10 +439,14 @@ describe("createSankeyDiagramLayout", () => {
       issueKeys.add(actualIssue.key);
     }
     for (const issueKey of issueKeys) {
-      createSankeyDiagramLayout(actualResult, {
-        type: "issue",
-        key: issueKey,
-      });
+      createSankeyDiagramLayout(
+        actualResult,
+        {
+          type: "issue",
+          key: issueKey,
+        },
+        actualRangeSelection,
+      );
     }
 
     expect(actualResult.contributors.length).toBeGreaterThan(0);

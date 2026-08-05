@@ -10,6 +10,7 @@ import type {
   WorkstreamScore,
 } from "../domain/model.ts";
 import { contributionKindLabel } from "../domain/scoring.ts";
+import type { RangeSelection } from "../services/calculationScope.ts";
 import { routeHref } from "../services/routes.ts";
 import type { SankeyDiagramSelection } from "../services/sankeyDiagram.ts";
 import SankeyDiagram from "./SankeyDiagram.vue";
@@ -21,6 +22,7 @@ const props = defineProps<{
   standalone?: StandaloneIssueScore | undefined;
   range: DateRange;
   result: LeaderboardResult;
+  rangeSelection: RangeSelection;
 }>();
 
 const sankeySelection = computed<SankeyDiagramSelection>(() => ({
@@ -80,7 +82,7 @@ function evidenceLabel(kind: EvidenceKind): string {
 <template>
   <main class="mx-auto max-w-6xl px-5 py-8 sm:px-8 sm:py-12">
     <a
-      :href="routeHref({ name: 'home' }, range)"
+      :href="routeHref({ name: 'home' }, rangeSelection)"
       class="text-sm font-semibold text-accent hover:underline"
     >
       ← リーダーボードへ戻る
@@ -108,7 +110,7 @@ function evidenceLabel(kind: EvidenceKind): string {
         <template v-if="issue.author != null">
           <a
             v-if="issue.authorIsHuman"
-            :href="routeHref({ name: 'person', login: issue.author.login }, range)"
+            :href="routeHref({ name: 'person', login: issue.author.login }, rangeSelection)"
             class="flex items-center gap-2 font-semibold text-ink hover:text-accent"
           >
             <img
@@ -202,6 +204,7 @@ function evidenceLabel(kind: EvidenceKind): string {
         v-if="hasSankeyData"
         :result="result"
         :selection="sankeySelection"
+        :range-selection="rangeSelection"
       />
       <div
         v-else
@@ -265,7 +268,7 @@ function evidenceLabel(kind: EvidenceKind): string {
         >
           <div>
             <a
-              :href="routeHref({ name: 'person', login: allocation.actor.login }, range)"
+              :href="routeHref({ name: 'person', login: allocation.actor.login }, rangeSelection)"
               class="font-semibold hover:text-accent"
             >
               {{ allocation.actor.login }}
@@ -337,7 +340,7 @@ function evidenceLabel(kind: EvidenceKind): string {
           :key="pull.key"
         >
           <a
-            :href="routeHref({ name: 'pull', key: pull.key }, range)"
+            :href="routeHref({ name: 'pull', key: pull.key }, rangeSelection)"
             class="font-semibold hover:text-accent"
           >
             {{ pull.repository }}#{{ pull.number }} {{ pull.title }}
@@ -359,7 +362,7 @@ function evidenceLabel(kind: EvidenceKind): string {
           </span>
           <div>
             <a
-              :href="routeHref({ name: 'person', login: allocation.actor.login }, range)"
+              :href="routeHref({ name: 'person', login: allocation.actor.login }, rangeSelection)"
               class="font-semibold hover:text-accent"
             >
               {{ allocation.actor.login }}

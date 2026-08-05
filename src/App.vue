@@ -14,7 +14,11 @@ import type {
   LeaderboardResult,
 } from "./domain/model.ts";
 import { calculateLeaderboard } from "./services/calculateLeaderboard.ts";
-import { parseDateRange } from "./services/calculationScope.ts";
+import {
+  resolveRangeSelection,
+  type RangeSelection,
+  type ResolvedRangeSelection,
+} from "./services/calculationScope.ts";
 import {
   isApplicationPath,
   parseAppLocation,
@@ -35,6 +39,7 @@ interface ReadyState {
   status: "ready";
   dataset: LeaderboardDataset;
   result: LeaderboardResult;
+  rangeSelection: RangeSelection;
   draftRange: DateRange;
   rangeError: string;
 }
@@ -171,21 +176,28 @@ async function loadDataset(): Promise<void> {
     }
     const dataset = parseLeaderboardDataset(raw);
     const location = parseAppLocation(window.location.href);
-    const fallbackRange = createInitialRange(dataset.range);
-    const range = resolveLocationRange(location, fallbackRange, dataset.range);
-    const result = calculateLeaderboard(dataset, range);
+    const resolvedRange = resolveLocationRange(
+      location,
+      createInitialRangeSelection(),
+      dataset.range,
+    );
+    const result = calculateLeaderboard(dataset, resolvedRange.range);
     viewState.value = {
       status: "ready",
       dataset,
       result,
-      draftRange: range,
+      rangeSelection: resolvedRange.selection,
+      draftRange: resolvedRange.range,
       rangeError: "",
     };
-    appLocation.value = { route: location.route, range };
+    appLocation.value = {
+      route: location.route,
+      rangeSelection: resolvedRange.selection,
+    };
     window.history.replaceState(
       null,
       "",
-      routeHref(location.route, range),
+      routeHref(location.route, resolvedRange.selection),
     );
   } catch (error) {
     console.error("事前取得データの読み込みに失敗しました", error);
@@ -199,20 +211,28 @@ async function loadDataset(): Promise<void> {
 function applyRange(): void {
   const state = requireReadyState();
   try {
-    const range = parseDateRange(state.draftRange, state.dataset.range);
-    const result = calculateLeaderboard(state.dataset, range);
+    const resolvedRange = resolveRangeSelection(
+      { type: "absolute", range: state.draftRange },
+      state.dataset.range,
+    );
+    const result = calculateLeaderboard(state.dataset, resolvedRange.range);
     viewState.value = {
       ...state,
       result,
-      draftRange: range,
+      rangeSelection: resolvedRange.selection,
+      draftRange: resolvedRange.range,
       rangeError: "",
     };
     const location: AppLocation = {
       route: appLocation.value.route,
-      range,
+      rangeSelection: resolvedRange.selection,
     };
     appLocation.value = location;
-    window.history.pushState(null, "", routeHref(location.route, range));
+    window.history.pushState(
+      null,
+      "",
+      routeHref(location.route, resolvedRange.selection),
+    );
     rangePanelOpen.value = false;
   } catch (error) {
     viewState.value = {
@@ -231,19 +251,6 @@ function setAllRange(): void {
   };
 }
 
-function setRecentDays(dayCount: number): void {
-  const state = requireReadyState();
-  const start = subtractDays(state.dataset.range.end, dayCount - 1);
-  viewState.value = {
-    ...state,
-    draftRange: {
-      start: start < state.dataset.range.start ? state.dataset.range.start : start,
-      end: state.dataset.range.end,
-    },
-    rangeError: "",
-  };
-}
-
 function handleLocationChange(): void {
   const location = parseAppLocation(window.location.href);
   const state = readyState.value;
@@ -252,23 +259,30 @@ function handleLocationChange(): void {
     appLocation.value = location;
     return;
   }
-  if (
-    location.range != null &&
-    rangesEqual(location.range, state.result.range) === false
-  ) {
-    try {
-      const range = parseDateRange(location.range, state.dataset.range);
-      viewState.value = {
-        ...state,
-        result: calculateLeaderboard(state.dataset, range),
-        draftRange: range,
-        rangeError: "",
-      };
-    } catch (error) {
-      console.warn("URL の対象期間を適用できません", error);
-    }
-  }
-  appLocation.value = location;
+  const resolvedRange = resolveLocationRange(
+    location,
+    createInitialRangeSelection(),
+    state.dataset.range,
+  );
+  viewState.value = {
+    ...state,
+    result:
+      rangesEqual(resolvedRange.range, state.result.range)
+        ? state.result
+        : calculateLeaderboard(state.dataset, resolvedRange.range),
+    rangeSelection: resolvedRange.selection,
+    draftRange: resolvedRange.range,
+    rangeError: "",
+  };
+  appLocation.value = {
+    route: location.route,
+    rangeSelection: resolvedRange.selection,
+  };
+  window.history.replaceState(
+    null,
+    "",
+    routeHref(location.route, resolvedRange.selection),
+  );
 }
 
 function handleDocumentClick(event: MouseEvent): void {
@@ -323,36 +337,20 @@ function closeRangePanel(): void {
 
 function resolveLocationRange(
   location: AppLocation,
-  fallbackRange: DateRange,
+  fallbackSelection: RangeSelection,
   availableRange: DateRange,
-): DateRange {
-  if (location.range == null) {
-    return fallbackRange;
-  }
+): ResolvedRangeSelection {
+  const selection = location.rangeSelection ?? fallbackSelection;
   try {
-    return parseDateRange(location.range, availableRange);
+    return resolveRangeSelection(selection, availableRange);
   } catch (error) {
     console.warn("URL の対象期間を適用できないため既定期間を使います", error);
-    return fallbackRange;
+    return resolveRangeSelection(fallbackSelection, availableRange);
   }
 }
 
-function createInitialRange(availableRange: DateRange): DateRange {
-  const recentStart = subtractDays(availableRange.end, 29);
-  return {
-    start:
-      recentStart < availableRange.start ? availableRange.start : recentStart,
-    end: availableRange.end,
-  };
-}
-
-function subtractDays(value: string, dayCount: number): string {
-  const date = new Date(value + "T00:00:00Z");
-  if (Number.isNaN(date.getTime())) {
-    throw new Error("日付を解釈できません: " + value);
-  }
-  date.setUTCDate(date.getUTCDate() - dayCount);
-  return date.toISOString().slice(0, 10);
+function createInitialRangeSelection(): RangeSelection {
+  return { type: "relative", count: 30, unit: "day" };
 }
 
 function rangesEqual(left: DateRange, right: DateRange): boolean {
@@ -388,7 +386,7 @@ function describeError(error: unknown): string {
     <header class="border-b border-line bg-surface">
       <div class="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-5 py-4 sm:px-8">
         <a
-          :href="readyState == null ? loadingHomeHref : routeHref({ name: 'home' }, readyState.result.range)"
+          :href="readyState == null ? loadingHomeHref : routeHref({ name: 'home' }, readyState.rangeSelection)"
           class="font-display text-sm font-semibold tracking-wide"
         >
           VOICEVOX Leaderboard
@@ -399,28 +397,28 @@ function describeError(error: unknown): string {
           class="order-3 flex w-full items-center gap-4 overflow-x-auto pt-1 text-xs font-semibold text-muted md:order-none md:w-auto md:pt-0"
         >
           <a
-            :href="routeHref({ name: 'home' }, readyState.result.range)"
+            :href="routeHref({ name: 'home' }, readyState.rangeSelection)"
             :aria-current="appLocation.route.name === 'home' ? 'page' : undefined"
             :class="appLocation.route.name === 'home' ? 'text-accent-dark' : 'hover:text-ink'"
           >
             リーダーボード
           </a>
           <a
-            :href="routeHref({ name: 'pulls' }, readyState.result.range)"
+            :href="routeHref({ name: 'pulls' }, readyState.rangeSelection)"
             :aria-current="appLocation.route.name === 'pulls' || appLocation.route.name === 'pull' ? 'page' : undefined"
             :class="appLocation.route.name === 'pulls' || appLocation.route.name === 'pull' ? 'text-accent-dark' : 'hover:text-ink'"
           >
             PR
           </a>
           <a
-            :href="routeHref({ name: 'issues' }, readyState.result.range)"
+            :href="routeHref({ name: 'issues' }, readyState.rangeSelection)"
             :aria-current="appLocation.route.name === 'issues' || appLocation.route.name === 'issue' ? 'page' : undefined"
             :class="appLocation.route.name === 'issues' || appLocation.route.name === 'issue' ? 'text-accent-dark' : 'hover:text-ink'"
           >
             Issue
           </a>
           <a
-            :href="routeHref({ name: 'methodology' }, readyState.result.range)"
+            :href="routeHref({ name: 'methodology' }, readyState.rangeSelection)"
             :aria-current="appLocation.route.name === 'methodology' ? 'page' : undefined"
             :class="appLocation.route.name === 'methodology' ? 'text-accent-dark' : 'hover:text-ink'"
           >
@@ -480,20 +478,30 @@ function describeError(error: unknown): string {
               </p>
 
               <div class="mt-4 flex flex-wrap gap-3 text-xs">
-                <button
-                  type="button"
+                <a
+                  :href="routeHref(appLocation.route, { type: 'relative', count: 7, unit: 'day' })"
                   class="font-semibold text-accent hover:underline"
-                  @click="setRecentDays(7)"
                 >
                   直近 7 日
-                </button>
-                <button
-                  type="button"
+                </a>
+                <a
+                  :href="routeHref(appLocation.route, { type: 'relative', count: 30, unit: 'day' })"
                   class="font-semibold text-accent hover:underline"
-                  @click="setRecentDays(30)"
                 >
                   直近 30 日
-                </button>
+                </a>
+                <a
+                  :href="routeHref(appLocation.route, { type: 'relative', count: 2, unit: 'week' })"
+                  class="font-semibold text-accent hover:underline"
+                >
+                  直近 2 週間
+                </a>
+                <a
+                  :href="routeHref(appLocation.route, { type: 'relative', count: 1, unit: 'month' })"
+                  class="font-semibold text-accent hover:underline"
+                >
+                  直近 1 か月
+                </a>
                 <button
                   type="button"
                   class="font-semibold text-accent hover:underline"
@@ -503,7 +511,9 @@ function describeError(error: unknown): string {
                 </button>
               </div>
 
-              <div class="mt-4 grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+              <div
+                class="mt-4 grid grid-cols-[1fr_auto_1fr] items-center gap-2"
+              >
                 <input
                   v-model="draftStart"
                   type="date"
@@ -522,6 +532,9 @@ function describeError(error: unknown): string {
                   class="min-w-0 rounded-xl border border-line bg-white px-3 py-2.5 text-sm"
                 >
               </div>
+              <p class="mt-3 text-xs leading-5 text-muted">
+                直近期間のリンクは URL に期間を保持し、データ更新後も最新の終了日を基準に表示します。
+              </p>
               <p
                 v-if="readyState.rangeError !== ''"
                 class="mt-3 text-sm text-danger"
@@ -572,19 +585,24 @@ function describeError(error: unknown): string {
         v-if="appLocation.route.name === 'home'"
         class="mx-auto max-w-7xl px-5 py-10 sm:px-8 sm:py-14"
       >
-        <LeaderboardTable :result="readyState.result" />
+        <LeaderboardTable
+          :result="readyState.result"
+          :range-selection="readyState.rangeSelection"
+        />
       </main>
 
       <PullListPage
         v-else-if="appLocation.route.name === 'pulls'"
         :pulls="readyState.dataset.pulls"
         :range="readyState.result.range"
+        :range-selection="readyState.rangeSelection"
       />
 
       <IssueListPage
         v-else-if="appLocation.route.name === 'issues'"
         :issues="readyState.dataset.issues"
         :range="readyState.result.range"
+        :range-selection="readyState.rangeSelection"
       />
 
       <MethodologyPage
@@ -598,6 +616,7 @@ function describeError(error: unknown): string {
         :contributor="currentContributor"
         :range="readyState.result.range"
         :result="readyState.result"
+        :range-selection="readyState.rangeSelection"
       />
 
       <PullPage
@@ -606,6 +625,7 @@ function describeError(error: unknown): string {
         :workstream="currentPullWorkstream"
         :range="readyState.result.range"
         :result="readyState.result"
+        :range-selection="readyState.rangeSelection"
       />
 
       <IssuePage
@@ -615,6 +635,7 @@ function describeError(error: unknown): string {
         :standalone="currentStandaloneIssue"
         :range="readyState.result.range"
         :result="readyState.result"
+        :range-selection="readyState.rangeSelection"
       />
 
       <main
@@ -631,7 +652,7 @@ function describeError(error: unknown): string {
           選択期間に人物の配点がないか、取得済みデータに項目がありません。
         </p>
         <a
-          :href="routeHref({ name: 'home' }, readyState.result.range)"
+          :href="routeHref({ name: 'home' }, readyState.rangeSelection)"
           class="mt-6 inline-block font-semibold text-accent hover:underline"
         >
           リーダーボードへ戻る

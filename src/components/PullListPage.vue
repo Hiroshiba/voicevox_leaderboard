@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { DateRange, PreparedPull } from "../domain/model.ts";
+import type { RangeSelection } from "../services/calculationScope.ts";
 import { routeHref } from "../services/routes.ts";
 
 const props = defineProps<{
   pulls: PreparedPull[];
   range: DateRange;
+  rangeSelection: RangeSelection;
 }>();
 
 const sortedPulls = computed(() =>
@@ -65,7 +67,7 @@ function formatLines(lines: number): string {
         class="border-b border-line last:border-b-0"
       >
         <a
-          :href="routeHref({ name: 'pull', key: pull.key }, range)"
+          :href="routeHref({ name: 'pull', key: pull.key }, rangeSelection)"
           class="grid gap-3 px-5 py-4 hover:bg-paper/55 md:grid-cols-[minmax(0,1fr)_12rem_9rem] md:items-center"
         >
           <div class="min-w-0">

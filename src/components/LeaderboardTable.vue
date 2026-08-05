@@ -2,11 +2,13 @@
 import { computed } from "vue";
 import { assertNonNullable } from "../domain/errors.ts";
 import type { LeaderboardResult } from "../domain/model.ts";
+import type { RangeSelection } from "../services/calculationScope.ts";
 import { routeHref } from "../services/routes.ts";
 import ScoreBreakdownBar from "./ScoreBreakdownBar.vue";
 
 const props = defineProps<{
   result: LeaderboardResult;
+  rangeSelection: RangeSelection;
 }>();
 
 const maximumContributorPoints = computed(() => {
@@ -93,7 +95,7 @@ function formatScore(score: number): string {
             </td>
             <td class="px-4 py-4">
               <a
-                :href="routeHref({ name: 'person', login: contributor.login }, result.range)"
+                :href="routeHref({ name: 'person', login: contributor.login }, rangeSelection)"
                 class="flex items-center gap-3 font-semibold hover:text-accent"
               >
                 <img

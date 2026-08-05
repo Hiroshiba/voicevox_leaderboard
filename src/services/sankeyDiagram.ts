@@ -8,6 +8,7 @@ import type {
   SourceReference,
   WorkstreamScore,
 } from "../domain/model.ts";
+import type { RangeSelection } from "./calculationScope.ts";
 import { routeHref, sourceHref } from "./routes.ts";
 
 export type SankeyDiagramNodeRole = "pull" | "issue" | "actor";
@@ -92,6 +93,7 @@ interface FlowGraph {
 
 interface FlowGraphBuilder {
   selection: SankeyDiagramSelection;
+  rangeSelection: RangeSelection;
   nodes: Map<string, FlowNode>;
   links: FlowLink[];
   linkIds: Set<string>;
@@ -130,8 +132,9 @@ const nodeGap = 16;
 export function createSankeyDiagramLayout(
   result: LeaderboardResult,
   selection: SankeyDiagramSelection,
+  rangeSelection: RangeSelection,
 ): SankeyDiagramLayout {
-  const graph = collectFlowGraph(result, selection);
+  const graph = collectFlowGraph(result, selection, rangeSelection);
   if (graph.links.length === 0) {
     throw new Error("選択対象に関係する配点経路がありません。");
   }
@@ -162,7 +165,7 @@ export function createSankeyDiagramLayout(
     height:
       Math.max(...nodeLayouts.map((layout) => layout.y + layout.height)) +
       diagramPadding,
-    nodes: createDiagramNodes(result, nodeLayouts),
+    nodes: createDiagramNodes(rangeSelection, nodeLayouts),
     links: createDiagramLinks(graph.links, nodeLayouts),
     originCount: graph.nodes.filter((node) => targetIds.has(node.id) === false)
       .length,
@@ -177,9 +180,11 @@ export function createSankeyDiagramLayout(
 function collectFlowGraph(
   result: LeaderboardResult,
   selection: SankeyDiagramSelection,
+  rangeSelection: RangeSelection,
 ): FlowGraph {
   const builder: FlowGraphBuilder = {
     selection,
+    rangeSelection,
     nodes: new Map<string, FlowNode>(),
     links: [],
     linkIds: new Set<string>(),
@@ -191,7 +196,7 @@ function collectFlowGraph(
     if (selectionMatchesWorkstream(selection, workstream) === false) {
       continue;
     }
-    collectWorkstreamFlows(builder, workstream, result);
+    collectWorkstreamFlows(builder, workstream);
   }
   for (const standalone of result.standaloneIssues) {
     if (
@@ -229,7 +234,6 @@ function collectFlowGraph(
         issueId,
         allocation,
         "standalone:" + standalone.key,
-        result,
         allocationMatchesStandaloneSelection(
           selection,
           standalone.key,
@@ -264,7 +268,6 @@ function collectFlowGraph(
 function collectWorkstreamFlows(
   builder: FlowGraphBuilder,
   workstream: WorkstreamScore,
-  result: LeaderboardResult,
 ): void {
   assertWorkstreamConservation(workstream);
   const pullByKey = new Map(
@@ -298,7 +301,6 @@ function collectWorkstreamFlows(
         issueId,
         allocation,
         "workstream:" + workstream.key,
-        result,
         allocationMatchesWorkstreamSelection(
           builder.selection,
           workstream,
@@ -325,7 +327,6 @@ function collectWorkstreamFlows(
       pullId,
       allocation,
       "workstream:" + workstream.key,
-      result,
       allocationMatchesWorkstreamSelection(
         builder.selection,
         workstream,
@@ -383,7 +384,7 @@ function collectWorkstreamFlows(
           " 点。" +
           allocation.reason,
         selected,
-        href: sourceHref(issueReference, result.range),
+        href: sourceHref(issueReference, builder.rangeSelection),
       });
     }
   }
@@ -394,7 +395,6 @@ function addAllocationLink(
   sourceId: string,
   allocation: ScoreAllocation,
   scopeId: string,
-  result: LeaderboardResult,
   selected: boolean,
 ): void {
   const actorId = addActorNode(builder, allocation.actor);
@@ -413,7 +413,7 @@ function addAllocationLink(
       " 点。" +
       allocation.reason,
     selected,
-    href: sourceHref(allocation.source, result.range),
+    href: sourceHref(allocation.source, builder.rangeSelection),
   });
   builder.allocationCount += 1;
   if (builder.selection.type === "contributor" && selected) {
@@ -554,7 +554,7 @@ function layoutColumn(
 }
 
 function createDiagramNodes(
-  result: LeaderboardResult,
+  rangeSelection: RangeSelection,
   layouts: NodeLayout[],
 ): SankeyDiagramNode[] {
   return layouts.map((layout): SankeyDiagramNode => {
@@ -577,7 +577,7 @@ function createDiagramNodes(
         selected: layout.flow.selected,
         href: routeHref(
           { name: "person", login: layout.flow.actor.login },
-          result.range,
+          rangeSelection,
         ),
       };
     }
@@ -602,7 +602,7 @@ function createDiagramNodes(
       width: layout.width,
       height: layout.height,
       selected: layout.flow.selected,
-      href: sourceHref(layout.flow.reference, result.range),
+      href: sourceHref(layout.flow.reference, rangeSelection),
     };
   });
 }

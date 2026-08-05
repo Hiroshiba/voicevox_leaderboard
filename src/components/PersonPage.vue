@@ -7,6 +7,7 @@ import type {
   LeaderboardResult,
 } from "../domain/model.ts";
 import { contributionKindLabel } from "../domain/scoring.ts";
+import type { RangeSelection } from "../services/calculationScope.ts";
 import { routeHref, sourceHref } from "../services/routes.ts";
 import type { SankeyDiagramSelection } from "../services/sankeyDiagram.ts";
 import SankeyDiagram from "./SankeyDiagram.vue";
@@ -16,6 +17,7 @@ const props = defineProps<{
   contributor: ContributorScore;
   range: DateRange;
   result: LeaderboardResult;
+  rangeSelection: RangeSelection;
 }>();
 
 const githubProfileUrl =
@@ -44,7 +46,7 @@ function kindClass(kind: ContributionKind): string {
 <template>
   <main class="mx-auto max-w-7xl px-5 py-8 sm:px-8 sm:py-12">
     <a
-      :href="routeHref({ name: 'home' }, range)"
+      :href="routeHref({ name: 'home' }, rangeSelection)"
       class="text-sm font-semibold text-accent hover:underline"
     >
       ← リーダーボードへ戻る
@@ -127,6 +129,7 @@ function kindClass(kind: ContributionKind): string {
       <SankeyDiagram
         :result="result"
         :selection="sankeySelection"
+        :range-selection="rangeSelection"
       />
     </section>
 
@@ -154,7 +157,7 @@ function kindClass(kind: ContributionKind): string {
           </span>
           <div class="min-w-0">
             <a
-              :href="sourceHref(entry.source, range)"
+              :href="sourceHref(entry.source, rangeSelection)"
               class="font-semibold hover:text-accent"
             >
               {{ entry.sourceTitle }}

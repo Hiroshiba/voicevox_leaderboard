@@ -22,6 +22,7 @@ export interface RepositorySummary {
   nameWithOwner: string;
   fork: boolean;
   mirror: boolean;
+  fullAiImplementation: boolean;
 }
 
 export interface FileScore {
@@ -66,6 +67,7 @@ export interface PreparedPull {
   nonGeneratedFiles: number;
   mass: number;
   conventionalBonus: number;
+  fullAiImplementation: boolean;
   reviews: PreparedReview[];
   reviewThreads: PreparedReviewThread[];
   issueKey?: string | undefined;
@@ -105,7 +107,7 @@ export interface AcquisitionStats {
 }
 
 export interface LeaderboardDataset {
-  schemaVersion: 2;
+  schemaVersion: 3;
   organization: "VOICEVOX";
   generatedAt: string;
   range: DateRange;

@@ -60,10 +60,13 @@ const documentationPathPattern =
   /(?:\.mdx?|\.rst|\.adoc|\.asciidoc|\.txt)$/i;
 
 /** ファイル変更から有効変更行数を計算する。 */
-export function calculateFileScore(change: FileChange): FileScore {
-  const generated = generatedPathPatterns.some((pattern) =>
-    pattern.test(change.filename),
-  );
+export function calculateFileScore(
+  change: FileChange,
+  fullAiImplementation: boolean,
+): FileScore {
+  const generated =
+    fullAiImplementation ||
+    generatedPathPatterns.some((pattern) => pattern.test(change.filename));
   const documentation = documentationPathPattern.test(change.filename);
   const factor = generated ? 0.05 : documentation ? 0.5 : 1;
   const changedLines = Math.min(200, change.additions + change.deletions);

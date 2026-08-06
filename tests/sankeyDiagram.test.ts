@@ -103,6 +103,7 @@ const pull: PreparedPull = {
   nonGeneratedFiles: 1,
   mass: 3,
   conventionalBonus: 1,
+  fullAiImplementation: false,
   reviews: [],
   reviewThreads: [],
   issueKey: "voicevox/voicevox#10",

@@ -34,6 +34,7 @@ const basePull: PreparedPull = {
   nonGeneratedFiles: 1,
   mass: 2.5,
   conventionalBonus: 1,
+  fullAiImplementation: false,
   reviews: [],
   reviewThreads: [],
 };
@@ -45,7 +46,7 @@ describe("calculateFileScore", () => {
         filename: "src/App.vue",
         additions: 180,
         deletions: 80,
-      }),
+      }, false),
     ).toMatchObject({
       effectiveLines: 200,
       generated: false,
@@ -58,7 +59,7 @@ describe("calculateFileScore", () => {
         filename: "docs/guide.md",
         additions: 40,
         deletions: 10,
-      }).effectiveLines,
+      }, false).effectiveLines,
     ).toBe(25);
   });
 
@@ -68,7 +69,20 @@ describe("calculateFileScore", () => {
         filename: "pnpm-lock.yaml",
         additions: 300,
         deletions: 100,
-      }),
+      }, false),
+    ).toMatchObject({
+      effectiveLines: 10,
+      generated: true,
+    });
+  });
+
+  it("フルAI実装リポジトリのファイルは生成物として 0.05 倍にする", () => {
+    expect(
+      calculateFileScore({
+        filename: "src/App.vue",
+        additions: 180,
+        deletions: 80,
+      }, true),
     ).toMatchObject({
       effectiveLines: 10,
       generated: true,
@@ -81,7 +95,7 @@ describe("calculateFileScore", () => {
         filename: "poetry.lock",
         additions: 100,
         deletions: 0,
-      }).effectiveLines,
+      }, false).effectiveLines,
     ).toBe(5);
   });
 });

@@ -17,6 +17,7 @@ import type {
   WorkstreamScore,
 } from "../domain/model.ts";
 import {
+  calculateFullAiImplementationCredit,
   calculateImplementationReviewAssurance,
   calculateImportance,
   calculateStandaloneIssueScore,
@@ -241,10 +242,17 @@ function allocateImplementation(
   const unallocatedEntries: UnallocatedScore[] = [];
   for (const pull of group.pulls) {
     const pullPool = 0.65 * importance * (pull.mass / totalMass);
+    const fullAiCredit = calculateFullAiImplementationCredit(pull);
     const reviewAssurance = calculateImplementationReviewAssurance(pull);
-    const distributablePullPool = pullPool * reviewAssurance.creditRatio;
+    const fullAiPullPool = pullPool * fullAiCredit.creditRatio;
+    const distributablePullPool =
+      fullAiPullPool * reviewAssurance.creditRatio;
     const source = createPullSource(pull);
     const sourceTitle = createPullTitle(pull);
+    const creditLabel =
+      fullAiCredit.type === "fullAi"
+        ? fullAiCredit.label + "かつ" + reviewAssurance.label
+        : reviewAssurance.label;
     const reason =
       pull.repository +
       "#" +
@@ -252,11 +260,30 @@ function allocateImplementation(
       " の実装質量 " +
       pull.mass.toFixed(2) +
       " による配分、" +
-      reviewAssurance.label +
+      creditLabel +
       "として実装枠の" +
-      reviewAssurance.creditRatio * 100 +
+      formatPercent(
+        fullAiCredit.creditRatio * reviewAssurance.creditRatio,
+      ) +
       "%を配分";
-    const qualityUnallocatedPoints = pullPool - distributablePullPool;
+    const fullAiUnallocatedPoints = pullPool - fullAiPullPool;
+    if (fullAiUnallocatedPoints > 0) {
+      unallocatedEntries.push(
+        createUnallocatedScore(
+          pull.key + ":implementation:full-ai:unallocated",
+          "implementation",
+          fullAiUnallocatedPoints,
+          source,
+          sourceTitle,
+          fullAiCredit.label +
+            "のため実装枠の" +
+            formatPercent(1 - fullAiCredit.creditRatio) +
+            "%を未配分",
+        ),
+      );
+    }
+    const qualityUnallocatedPoints =
+      fullAiPullPool - distributablePullPool;
     if (qualityUnallocatedPoints > 0) {
       unallocatedEntries.push(
         createUnallocatedScore(
@@ -267,7 +294,9 @@ function allocateImplementation(
           sourceTitle,
           reviewAssurance.label +
             "のため実装枠の" +
-            (1 - reviewAssurance.creditRatio) * 100 +
+            formatPercent(
+              fullAiCredit.creditRatio * (1 - reviewAssurance.creditRatio),
+            ) +
             "%を未配分",
         ),
       );
@@ -993,4 +1022,8 @@ function isDateInRange(timestamp: string, range: DateRange): boolean {
 
 function sum(values: number[]): number {
   return values.reduce((total, value) => total + value, 0);
+}
+
+function formatPercent(ratio: number): number {
+  return Math.round(ratio * 100);
 }

@@ -48,6 +48,18 @@ type ImplementationReviewAssurance =
       label: string;
     };
 
+type FullAiImplementationCredit =
+  | {
+      type: "human";
+      creditRatio: 1;
+      label: string;
+    }
+  | {
+      type: "fullAi";
+      creditRatio: 0.3;
+      label: string;
+    };
+
 const generatedPathPatterns = [
   /(?:^|\/)(?:vendor|vendors|third_party|node_modules|dist|generated)(?:\/|$)/i,
   /(?:^|\/)(?:__snapshots__|snapshots?)(?:\/|$)/i,
@@ -100,6 +112,24 @@ export function calculateImportance(input: ImportanceInput): number {
       Math.log2(input.repositoryCount) +
       input.conventionalBonus,
   );
+}
+
+/** PR の実装体制と実装枠の配分率を決める。 */
+export function calculateFullAiImplementationCredit(
+  pull: PreparedPull,
+): FullAiImplementationCredit {
+  if (pull.fullAiImplementation) {
+    return {
+      type: "fullAi",
+      creditRatio: 0.3,
+      label: "フルAI実装リポジトリ",
+    };
+  }
+  return {
+    type: "human",
+    creditRatio: 1,
+    label: "人間が実装するリポジトリ",
+  };
 }
 
 /** PR の独立したレビュー保証と実装枠の配分率を決める。 */

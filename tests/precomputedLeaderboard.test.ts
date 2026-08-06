@@ -246,6 +246,83 @@ describe("calculateLeaderboard", () => {
     expect(qualityLoss?.reason).toContain("独立した品質確認なし");
   });
 
+  it("フルAI実装リポジトリの実装枠を 30%だけ配分する", () => {
+    const fullAiPull: PreparedPull = {
+      ...pull(6, "2026-07-15T00:00:00Z"),
+      fullAiImplementation: true,
+      issueKey: undefined,
+    };
+    const fullAiDataset: LeaderboardDataset = {
+      ...dataset,
+      pulls: [fullAiPull],
+      issues: [],
+    };
+
+    const result = calculateLeaderboard(fullAiDataset, dataset.range);
+    const workstream = result.workstreams[0];
+    expect(workstream).toBeDefined();
+    if (workstream == null) {
+      throw new Error("検証対象のワークストリームがありません。");
+    }
+
+    expect(workstream.implementationPoints).toBeCloseTo(
+      workstream.importance * 0.195,
+      12,
+    );
+    const fullAiLoss = workstream.unallocatedEntries.find(
+      (entry) =>
+        entry.id === fullAiPull.key + ":implementation:full-ai:unallocated",
+    );
+    expect(fullAiLoss?.points).toBeCloseTo(workstream.importance * 0.455, 12);
+    expect(fullAiLoss?.reason).toBe(
+      "フルAI実装リポジトリのため実装枠の70%を未配分",
+    );
+  });
+
+  it("フルAI実装リポジトリの未レビュー PR へ両方の配分率を掛ける", () => {
+    const fullAiPull: PreparedPull = {
+      ...pull(7, "2026-07-15T00:00:00Z"),
+      fullAiImplementation: true,
+      mergedBy: alice,
+      reviews: [],
+      reviewThreads: [],
+      issueKey: undefined,
+    };
+    const fullAiDataset: LeaderboardDataset = {
+      ...dataset,
+      pulls: [fullAiPull],
+      issues: [],
+    };
+
+    const result = calculateLeaderboard(fullAiDataset, dataset.range);
+    const workstream = result.workstreams[0];
+    expect(workstream).toBeDefined();
+    if (workstream == null) {
+      throw new Error("検証対象のワークストリームがありません。");
+    }
+
+    expect(workstream.implementationPoints).toBeCloseTo(
+      workstream.importance * 0.0975,
+      12,
+    );
+    expect(
+      workstream.allocations.map((allocation) => allocation.reason),
+    ).toEqual([
+      expect.stringContaining(
+        "フルAI実装リポジトリかつ独立した品質確認なしとして実装枠の15%を配分",
+      ),
+    ]);
+    const qualityLoss = workstream.unallocatedEntries.find(
+      (entry) =>
+        entry.id ===
+        fullAiPull.key + ":implementation:review-assurance:unallocated",
+    );
+    expect(qualityLoss?.points).toBeCloseTo(workstream.importance * 0.0975, 12);
+    expect(qualityLoss?.reason).toBe(
+      "独立した品質確認なしのため実装枠の15%を未配分",
+    );
+  });
+
   it("Bot 作者へ渡らない実装枠を未配分として残す", () => {
     const botPull: PreparedPull = {
       ...pull(4, "2026-07-15T00:00:00Z"),

@@ -11,6 +11,10 @@ import {
   isSubstantiveIssueText,
   isSubstantiveReviewText,
 } from "../src/domain/evidence.ts";
+import {
+  isFullAiRepository,
+  parseFullAiRepositories,
+} from "../src/domain/fullAiRepositories.ts";
 import type {
   Actor,
   DateRange,
@@ -45,6 +49,10 @@ const pullFilesQuery = `query($owner: String!, $repository: String!, $number: In
     }
   }
 }`;
+const fullAiRepositoriesPath = new URL(
+  "../config/fullAiRepositories.json",
+  import.meta.url,
+);
 const cacheFormatVersion = 2;
 const coreConcurrency = 8;
 const searchIntervalMilliseconds = 2100;
@@ -942,6 +950,7 @@ async function main(): Promise<void> {
     throw new Error("GH_TOKEN または GITHUB_TOKEN を設定してください。");
   }
 
+  const fullAiRepositories = await readFullAiRepositories();
   const client = new GitHubApiClient(token.trim(), options.cacheDirectory);
   console.log("VOICEVOX の公開リポジトリを取得します。");
   const repositories = (await client.paginate(
@@ -958,6 +967,14 @@ async function main(): Promise<void> {
     repositories.map((repository) => repository.full_name.toLowerCase()),
   );
   console.log(repositories.length + " 件を対象にします。fork と mirror を含みます。");
+  for (const configuredRepository of fullAiRepositories) {
+    if (repositoryKeys.has(configuredRepository) === false) {
+      console.warn(
+        configuredRepository +
+          " はフルAI実装として設定されていますが、対象リポジトリにありません。",
+      );
+    }
+  }
 
   const [pullTargets, issueTargets] = await Promise.all([
     searchTargets(client, "pull", options.range, repositoryKeys),
@@ -997,7 +1014,11 @@ async function main(): Promise<void> {
   const pulls = bundles
     .map((bundle, index) => {
       const resolvedIssue = resolvedIssues[index];
-      return preparePull(bundle, resolvedIssue);
+      return preparePull(
+        bundle,
+        resolvedIssue,
+        isFullAiRepository(fullAiRepositories, bundle.repository),
+      );
     })
     .sort((left, right) => left.key.localeCompare(right.key));
   const issues = (await builder.prepareIssues()).sort((left, right) =>
@@ -1005,7 +1026,7 @@ async function main(): Promise<void> {
   );
 
   const dataset: LeaderboardDataset = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     organization,
     generatedAt: new Date().toISOString(),
     range: options.range,
@@ -1013,6 +1034,10 @@ async function main(): Promise<void> {
       nameWithOwner: repository.full_name,
       fork: repository.fork,
       mirror: repository.mirror_url != null,
+      fullAiImplementation: isFullAiRepository(
+        fullAiRepositories,
+        repository.full_name,
+      ),
     })),
     pulls,
     issues,
@@ -1022,6 +1047,7 @@ async function main(): Promise<void> {
       "古い Issue の本文編集日時は特定できないため、本文の証拠要素は Issue 作成日が選択期間内の場合だけ数えます。",
       "複数 PR の Conventional Commits 補正は、PR 分割による加点を防ぐため最大値を一度だけ使います。",
       "共同作者は GitHub が関連付けたコミット作者と GitHub noreply 形式の Co-authored-by から解決します。",
+      "フルAI実装かどうかはリポジトリ単位の設定で決めます。PR ごとの AI 利用は判定に使いません。",
     ],
     acquisition: client.getAcquisitionStats(),
   };
@@ -1039,6 +1065,18 @@ async function main(): Promise<void> {
       validated.acquisition.notModifiedResponses +
       " 回。",
   );
+}
+
+async function readFullAiRepositories(): Promise<Set<string>> {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await readFile(fullAiRepositoriesPath, "utf8"));
+  } catch (error) {
+    throw new Error("フルAI実装リポジトリ設定を読み取れません。", {
+      cause: error,
+    });
+  }
+  return parseFullAiRepositories(raw);
 }
 
 async function searchTargets(
@@ -1137,6 +1175,7 @@ function createSearchQuery(kind: "pull" | "issue", range: DateRange): string {
 function preparePull(
   bundle: PullBundle,
   resolvedIssue: ResolvedIssue | undefined,
+  fullAiImplementation: boolean,
 ): PreparedPull {
   const mergedAt = bundle.pull.merged_at;
   assertNonNullable(
@@ -1156,7 +1195,9 @@ function preparePull(
     createKey(bundle.repository, bundle.pull.number) +
       " はマージ済みですがマージ者を取得できません。",
   );
-  const files = bundle.files.map(calculateFileScore);
+  const files = bundle.files.map((file) =>
+    calculateFileScore(file, fullAiImplementation),
+  );
   const effectiveLines = sum(files.map((file) => file.effectiveLines));
   const nonGeneratedFiles = files.filter((file) => file.generated === false).length;
   const body = bundle.pull.body ?? "";
@@ -1181,6 +1222,7 @@ function preparePull(
       body,
       bundle.pull.labels.map((label) => label.name),
     ),
+    fullAiImplementation,
     reviews: bundle.reviews
       .filter(
         (review) =>

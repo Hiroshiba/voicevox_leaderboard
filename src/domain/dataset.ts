@@ -43,6 +43,7 @@ const preparedPullSchema = z.object({
   nonGeneratedFiles: z.number().int().nonnegative(),
   mass: z.number().positive(),
   conventionalBonus: z.number().nonnegative(),
+  fullAiImplementation: z.boolean(),
   reviews: z.array(
     z.object({
       actor: actorSchema,
@@ -86,7 +87,7 @@ const preparedIssueSchema = z.object({
 });
 
 export const leaderboardDatasetSchema = z.object({
-  schemaVersion: z.literal(2),
+  schemaVersion: z.literal(3),
   organization: z.literal("VOICEVOX"),
   generatedAt: dateTimeSchema,
   range: z.object({
@@ -98,6 +99,7 @@ export const leaderboardDatasetSchema = z.object({
       nameWithOwner: z.string().min(3),
       fork: z.boolean(),
       mirror: z.boolean(),
+      fullAiImplementation: z.boolean(),
     }),
   ),
   pulls: z.array(preparedPullSchema),

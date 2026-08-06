@@ -3,6 +3,7 @@ import type { DateRange } from "../domain/model.ts";
 
 defineProps<{
   notices: string[];
+  fullAiRepositories: string[];
   range: DateRange;
 }>();
 </script>
@@ -92,6 +93,7 @@ defineProps<{
               共同作者がいる場合は作者へ 70%、共同作者全体へ 30%を配点します。
               マージまでに作者以外の人間による承認、実質レビュー、マージのいずれかがあれば、実装枠を全量配分します。
               独立した品質確認がない場合は、実装枠の 50%だけを配分します。
+              フルAI実装リポジトリでは、さらに実装枠の 30%だけを配分します。
             </p>
           </div>
           <div>
@@ -116,10 +118,11 @@ defineProps<{
         </div>
         <div class="mt-5 rounded-2xl bg-ink px-5 py-4 text-white">
           <p class="overflow-x-auto font-mono text-sm leading-7 whitespace-nowrap">
-            実装配分枠 = 0.65 I × A
+            実装配分枠 = 0.65 I × A × G
           </p>
           <p class="mt-1 text-sm leading-6 text-white/70">
             A は独立した品質確認があれば 1、なければ 0.5 です。
+            G はフルAI実装リポジトリなら 0.3、それ以外は 1 です。
           </p>
         </div>
         <p class="mt-5 rounded-xl bg-paper/70 p-4 text-sm leading-7 text-muted">
@@ -127,10 +130,51 @@ defineProps<{
           未配分点は人物の順位へ加えません。
         </p>
         <p class="mt-4 text-sm leading-7 text-muted">
-          AI 利用の記載や推定結果は係数に使いません。
-          AI 支援かどうかにかかわらず、独立した人間の品質確認を同じ条件で評価します。
+          PR ごとの AI 利用の記載や推定結果は係数に使いません。
+          フルAI実装かどうかはリポジトリ単位の設定で扱います。
+          独立した人間の品質確認は、どの PR にも同じ条件で適用します。
           Bot レビューは品質確認に数えません。
         </p>
+      </section>
+
+      <section class="rounded-3xl border border-line bg-surface p-6 sm:p-8">
+        <h2 class="font-display text-2xl font-semibold">
+          フルAI実装リポジトリ
+        </h2>
+        <p class="mt-3 text-sm leading-7 text-muted">
+          AI へ実装させる前提で運用しているリポジトリは、設定ファイルで指定します。
+          指定したリポジトリの PR は、変更ファイルをすべて生成物として数えます。
+          有効変更行 E は 0.05 倍になり、非生成ファイル数 F は 0 になります。
+          AI が書いた行数は人間の作業量を表さないためです。
+        </p>
+        <p class="mt-3 text-sm leading-7 text-muted">
+          実装枠は 30%だけを作者と共同作者へ配分し、残りを未配分にします。
+          コードを書いたのは AI で、人間の実装側の関与は指示と受け入れに限られるためです。
+          レビュー枠と Issue・調査枠の割合は変えません。
+          AI が書いたコードを人間が確認する作業は、他のリポジトリと同じ価値があるためです。
+        </p>
+        <div class="mt-5 rounded-xl bg-paper/70 p-4 text-sm">
+          <p class="font-semibold">
+            対象リポジトリ
+          </p>
+          <ul
+            v-if="fullAiRepositories.length > 0"
+            class="mt-2 space-y-1 font-mono text-xs text-muted"
+          >
+            <li
+              v-for="repository in fullAiRepositories"
+              :key="repository"
+            >
+              {{ repository }}
+            </li>
+          </ul>
+          <p
+            v-else
+            class="mt-2 leading-6 text-muted"
+          >
+            フルAI実装として設定したリポジトリはありません。
+          </p>
+        </div>
       </section>
 
       <section class="rounded-3xl border border-line bg-surface p-6 sm:p-8">

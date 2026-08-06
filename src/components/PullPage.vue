@@ -8,6 +8,7 @@ import type {
   WorkstreamScore,
 } from "../domain/model.ts";
 import {
+  calculateFullAiImplementationCredit,
   calculateImplementationReviewAssurance,
   contributionKindLabel,
 } from "../domain/scoring.ts";
@@ -35,6 +36,14 @@ const hasSankeyData = computed(
 );
 const reviewAssurance = computed(() =>
   calculateImplementationReviewAssurance(props.pull),
+);
+const fullAiCredit = computed(() =>
+  calculateFullAiImplementationCredit(props.pull),
+);
+const implementationCreditPercent = computed(() =>
+  Math.round(
+    fullAiCredit.value.creditRatio * reviewAssurance.value.creditRatio * 100,
+  ),
 );
 
 function formatScore(score: number): string {
@@ -144,12 +153,19 @@ function kindClass(kind: ContributionKind): string {
       </dl>
       <div class="mt-4 rounded-xl bg-paper/70 px-4 py-3 text-sm leading-6 text-muted">
         <p>
+          <span class="font-semibold text-ink">実装体制</span>
+          {{ fullAiCredit.label }}
+        </p>
+        <p>
           <span class="font-semibold text-ink">レビュー保証</span>
           {{ reviewAssurance.label }}
         </p>
         <p>
           この PR に割り当てられた実装枠の
-          {{ reviewAssurance.creditRatio * 100 }}%を作者と共同作者へ配分します。
+          {{ implementationCreditPercent }}%を作者と共同作者へ配分します。
+        </p>
+        <p v-if="pull.fullAiImplementation">
+          変更ファイルはすべて生成物として数えます。
         </p>
       </div>
     </article>

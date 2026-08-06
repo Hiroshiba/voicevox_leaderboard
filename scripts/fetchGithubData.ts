@@ -33,6 +33,18 @@ import {
 
 const organization = "VOICEVOX";
 const githubApiBaseUrl = "https://api.github.com";
+const githubGraphqlUrl = "https://api.github.com/graphql";
+const pullFilesQuery = `query($owner: String!, $repository: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $repository) {
+    pullRequest(number: $number) {
+      changedFiles
+      files(first: 100, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes { path additions deletions }
+      }
+    }
+  }
+}`;
 const cacheFormatVersion = 2;
 const coreConcurrency = 8;
 const searchIntervalMilliseconds = 2100;
@@ -153,6 +165,39 @@ const issueCommentSchema = z.object({
 
 const apiErrorSchema = z.object({
   message: z.string(),
+});
+
+const graphqlErrorSchema = z.object({
+  errors: z
+    .array(
+      z.object({
+        message: z.string(),
+      }),
+    )
+    .min(1),
+});
+
+const pullFilesResultSchema = z.object({
+  data: z.object({
+    repository: z.object({
+      pullRequest: z.object({
+        changedFiles: z.number().int().nonnegative(),
+        files: z.object({
+          pageInfo: z.object({
+            hasNextPage: z.boolean(),
+            endCursor: z.string().nullable(),
+          }),
+          nodes: z.array(
+            z.object({
+              path: z.string().min(1),
+              additions: z.number().int().nonnegative(),
+              deletions: z.number().int().nonnegative(),
+            }),
+          ),
+        }),
+      }),
+    }),
+  }),
 });
 
 const cacheEntrySchema = z.object({
@@ -362,6 +407,54 @@ class GitHubApiClient {
     );
   }
 
+  /** マージ済み PR の変更ファイルを GraphQL API から取得する。 */
+  async requestMergedPullFiles(
+    repository: string,
+    number: number,
+    maxPages: number,
+  ): Promise<GithubPullFile[]> {
+    const parts = parseRepository(repository);
+    const files: GithubPullFile[] = [];
+    let after: string | null = null;
+    for (let page = 1; page <= maxPages; page += 1) {
+      const payload = await this.postGraphql(pullFilesQuery, {
+        owner: parts.owner,
+        repository: parts.repository,
+        number,
+        after,
+      });
+      const failure = graphqlErrorSchema.safeParse(payload);
+      if (failure.success) {
+        throw new Error(
+          "GitHub GraphQL API がエラーを返しました。" +
+            failure.data.errors.map((error) => error.message).join(" "),
+        );
+      }
+      const pullRequest =
+        pullFilesResultSchema.parse(payload).data.repository.pullRequest;
+      files.push(
+        ...pullRequest.files.nodes.map((node) => ({
+          filename: node.path,
+          additions: node.additions,
+          deletions: node.deletions,
+        })),
+      );
+      if (pullRequest.files.pageInfo.hasNextPage === false) {
+        if (files.length !== pullRequest.changedFiles) {
+          throw new Error(
+            createKey(repository, number) +
+              " の変更ファイル数が GitHub GraphQL API の集計値と一致しません。",
+          );
+        }
+        return files;
+      }
+      after = pullRequest.files.pageInfo.endCursor;
+    }
+    throw new Error(
+      "GitHub GraphQL API のページ上限まで取得しました。変更ファイルを完全に取得できません。",
+    );
+  }
+
   /** 取得回数と最後に確認した API 残量を返す。 */
   getAcquisitionStats(): LeaderboardDataset["acquisition"] {
     const core = this.rateStates.get("core");
@@ -442,6 +535,54 @@ class GitHubApiClient {
       return parsed;
     }
     throw new Error("GitHub API のリトライ回数を超えました。");
+  }
+
+  private async postGraphql(
+    query: string,
+    variables: Record<string, string | number | null>,
+  ): Promise<unknown> {
+    const headers = this.createHeaders(undefined);
+    headers.set("Content-Type", "application/json");
+    const body = JSON.stringify({ query, variables });
+
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      let response: Response;
+      try {
+        response = await this.semaphore.run(async () => {
+          this.stats.networkRequests += 1;
+          return fetch(githubGraphqlUrl, { method: "POST", headers, body });
+        });
+      } catch (error) {
+        if (attempt < 3 && error instanceof TypeError) {
+          await wait(attempt * 750);
+          continue;
+        }
+        throw new Error("GitHub GraphQL API との通信に失敗しました。", {
+          cause: error,
+        });
+      }
+
+      if (shouldRetry(response) && attempt < 3) {
+        await wait(retryDelayMilliseconds(response.headers, attempt));
+        continue;
+      }
+      const payload = await parseJsonResponse(response);
+      if (response.ok === false) {
+        const parsedError = apiErrorSchema.safeParse(payload);
+        const detail = parsedError.success
+          ? parsedError.data.message
+          : response.statusText;
+        throw new GitHubApiError(
+          "GitHub GraphQL API がエラーを返しました。HTTP " +
+            response.status +
+            " " +
+            detail,
+          response.status,
+        );
+      }
+      return payload;
+    }
+    throw new Error("GitHub GraphQL API のリトライ回数を超えました。");
   }
 
   private createHeaders(cache: CacheEntry | undefined): Headers {
@@ -598,17 +739,11 @@ class DatasetBuilder {
     }
     const path = createRepositoryPath(target.repository) + "/pulls/" + target.number;
     const [files, reviews, reviewComments, commits] = await Promise.all([
-      this.client.paginate(path + "/files", pullFileSchema, 31),
+      this.fetchPullFiles(target, path, pull.changed_files),
       this.client.paginate(path + "/reviews", pullReviewSchema, 30),
       this.client.paginate(path + "/comments", reviewCommentSchema, 30),
       this.client.paginate(path + "/commits", pullCommitSchema, 30),
     ]);
-    if (files.length !== pull.changed_files) {
-      throw new Error(
-        createKey(target.repository, target.number) +
-          " の変更ファイル数が GitHub API の集計値と一致しません。",
-      );
-    }
     return {
       repository: target.repository,
       pull,
@@ -669,6 +804,37 @@ class DatasetBuilder {
         this.activityCandidateKeys.has(key),
       );
     });
+  }
+
+  private async fetchPullFiles(
+    target: Target,
+    path: string,
+    changedFiles: number,
+  ): Promise<GithubPullFile[]> {
+    let files: GithubPullFile[];
+    try {
+      files = await this.client.paginate(path + "/files", pullFileSchema, 31);
+    } catch (error) {
+      if (error instanceof GitHubApiError === false || error.status !== 422) {
+        throw error;
+      }
+      console.warn(
+        createKey(target.repository, target.number) +
+          " は REST API が差分を生成できないため GraphQL API から変更ファイルを取得します。",
+      );
+      return this.client.requestMergedPullFiles(
+        target.repository,
+        target.number,
+        31,
+      );
+    }
+    if (files.length !== changedFiles) {
+      throw new Error(
+        createKey(target.repository, target.number) +
+          " の変更ファイル数が GitHub API の集計値と一致しません。",
+      );
+    }
+    return files;
   }
 
   private async getPull(repository: string, number: number): Promise<GithubPull> {

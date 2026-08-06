@@ -81,6 +81,16 @@ const draftEnd = computed<string>({
   },
 });
 
+const fullAiRepositories = computed(() => {
+  const state = readyState.value;
+  if (state == null) {
+    return [];
+  }
+  return state.dataset.repositories
+    .filter((repository) => repository.fullAiImplementation)
+    .map((repository) => repository.nameWithOwner);
+});
+
 const currentContributor = computed(() => {
   const state = readyState.value;
   const route = appLocation.value.route;
@@ -608,6 +618,7 @@ function describeError(error: unknown): string {
       <MethodologyPage
         v-else-if="appLocation.route.name === 'methodology'"
         :notices="readyState.dataset.notices"
+        :full-ai-repositories="fullAiRepositories"
         :range="readyState.result.range"
       />
 

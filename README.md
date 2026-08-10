@@ -105,6 +105,9 @@ GitHub リポジトリの Pages 設定では Source に GitHub Actions を指定
     pnpm test
     pnpm build
 
+`.github/workflows/ci.yml` はプルリクエストと `main` ブランチへの push で開始し、上記をすべて実行します。
+実行が重なった場合は、同じ ref の実行中の CI を中断して新しい実行を開始します。
+
 ## 計算内容
 
 - 同じ主 Issue を参照するマージ済み PR を一つにまとめる

@@ -5,14 +5,15 @@ import type {
   ContributionKind,
   DateRange,
   LeaderboardResult,
-  PreparedMergedPull,
   PreparedPull,
   WorkstreamScore,
 } from "../domain/model.ts";
 import {
   calculateFullAiImplementationCredit,
   calculateImplementationReviewAssurance,
+  calculateImplementationStateCredit,
   contributionKindLabel,
+  resolvePullOutcomeAtRangeEnd,
 } from "../domain/scoring.ts";
 import type { RangeSelection } from "../services/calculationScope.ts";
 import { routeHref } from "../services/routes.ts";
@@ -36,24 +37,30 @@ const hasSankeyData = computed(
   () =>
     props.workstream != null && props.workstream.allocations.length > 0,
 );
-const reviewAssurance = computed(() => {
-  if (isMergedPull(props.pull) === false) {
-    return undefined;
-  }
-  return calculateImplementationReviewAssurance(props.pull);
-});
+const pullAtRangeEnd = computed<PreparedPull>(() => ({
+  ...props.pull,
+  outcome: resolvePullOutcomeAtRangeEnd(props.pull.outcome, props.range.end),
+}));
+const reviewAssurance = computed(() =>
+  calculateImplementationReviewAssurance(
+    pullAtRangeEnd.value,
+    props.range.end,
+  ),
+);
 const fullAiCredit = computed(() =>
   calculateFullAiImplementationCredit(props.pull),
 );
-const implementationCreditPercent = computed(() => {
-  const assurance = reviewAssurance.value;
-  if (assurance == null) {
-    return undefined;
-  }
-  return Math.round(
-    fullAiCredit.value.creditRatio * assurance.creditRatio * 100,
-  );
-});
+const stateCredit = computed(() =>
+  calculateImplementationStateCredit(pullAtRangeEnd.value.outcome),
+);
+const implementationCreditPercent = computed(() =>
+  Math.round(
+    fullAiCredit.value.creditRatio *
+      reviewAssurance.value.creditRatio *
+      stateCredit.value.creditRatio *
+      100,
+  ),
+);
 
 const outcomeDateLabel = computed(() => {
   const outcome = props.pull.outcome;
@@ -68,10 +75,6 @@ const outcomeDateLabel = computed(() => {
       throw new UnreachableError(outcome);
   }
 });
-
-function isMergedPull(pull: PreparedPull): pull is PreparedMergedPull {
-  return pull.outcome.kind === "merged";
-}
 
 function formatScore(score: number): string {
   return score.toFixed(2);
@@ -179,7 +182,6 @@ function kindClass(kind: ContributionKind): string {
         </div>
       </dl>
       <div
-        v-if="reviewAssurance != null && implementationCreditPercent != null"
         class="mt-4 rounded-xl bg-paper/70 px-4 py-3 text-sm leading-6 text-muted"
       >
         <p>

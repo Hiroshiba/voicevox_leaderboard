@@ -16,7 +16,7 @@ defineProps<{
       </h1>
       <p class="mt-4 max-w-3xl text-sm leading-7 text-muted">
         対象期間に発生した GitHub 上の活動を、次の規則で一つの点数へ変換します。
-        PR のマージ日とレビュー日時、Issue の作成、Close、コメント日時を期間判定に使います。
+        PR の状態に応じた配点対象日とレビュー日時、Issue の作成、Close、コメント日時を期間判定に使います。
       </p>
     </header>
 
@@ -28,7 +28,7 @@ defineProps<{
         <p class="mt-3 text-sm leading-7 text-muted">
           Closing keyword、関連 Issue セクション、関連 PR の順に主 Issue を探します。
           同じ主 Issue を参照するマージ済み PR は一つのワークストリームへまとめます。
-          主 Issue がない PR は単独のワークストリームとして扱います。
+          主 Issue がない PR と未マージ PR は単独のワークストリームとして扱います。
         </p>
         <div class="mt-5 rounded-2xl bg-ink px-5 py-4 text-white">
           <p class="overflow-x-auto font-mono text-sm leading-7 whitespace-nowrap">
@@ -78,6 +78,54 @@ defineProps<{
 
       <section class="rounded-3xl border border-line bg-surface p-6 sm:p-8">
         <h2 class="font-display text-2xl font-semibold">
+          PR の状態と未マージ PR
+        </h2>
+        <p class="mt-3 text-sm leading-7 text-muted">
+          PR の状態は選択期間の末日時点で判定します。
+          期間末より後にマージまたはクローズされた PR は、その期間ではまだオープンとして扱います。
+        </p>
+        <dl class="mt-5 grid gap-4 text-sm sm:grid-cols-3">
+          <div class="rounded-xl bg-paper/70 p-4">
+            <dt class="font-semibold">
+              マージ済み 1 倍
+            </dt>
+            <dd class="mt-2 leading-6 text-muted">
+              マージ日を配点対象日にします。
+            </dd>
+          </div>
+          <div class="rounded-xl bg-paper/70 p-4">
+            <dt class="font-semibold">
+              オープン 0.5 倍
+            </dt>
+            <dd class="mt-2 leading-6 text-muted">
+              作成日を配点対象日にします。
+            </dd>
+          </div>
+          <div class="rounded-xl bg-paper/70 p-4">
+            <dt class="font-semibold">
+              クローズ済み 0.25 倍
+            </dt>
+            <dd class="mt-2 leading-6 text-muted">
+              クローズ日を配点対象日にします。
+            </dd>
+          </div>
+        </dl>
+        <p class="mt-5 text-sm leading-7 text-muted">
+          実装枠には状態に応じた係数を掛けます。
+          未マージ PR は、作者以外の人間による承認または実質レビューがなければ実装枠を配分しません。
+        </p>
+        <p class="mt-3 text-sm leading-7 text-muted">
+          レビュー枠には状態係数を掛けません。
+          レビューの労力はマージ結果に左右されないためです。
+        </p>
+        <p class="mt-3 text-sm leading-7 text-muted">
+          未マージ PR には関連 Issue 枠を配分せず、他の PR ともまとめません。
+          関連 Issue は独立 Issue として採点します。
+        </p>
+      </section>
+
+      <section class="rounded-3xl border border-line bg-surface p-6 sm:p-8">
+        <h2 class="font-display text-2xl font-semibold">
           実装、レビュー、Issue への配分
         </h2>
         <div class="mt-5 grid gap-5 lg:grid-cols-3">
@@ -89,7 +137,8 @@ defineProps<{
               PR の実装質量に比例して分けます。共同作者がいなければ作者へ全量を配点します。
               共同作者がいる場合は作者へ 70%、共同作者全体へ 30%を配点します。
               マージまでに作者以外の人間による承認、実質レビュー、マージのいずれかがあれば、実装枠を全量配分します。
-              独立した品質確認がない場合は、実装枠の 50%だけを配分します。
+              独立した品質確認がないマージ済み PR は、実装枠の 50%だけを配分します。
+              未マージ PR は実装枠を配分しません。
               フルAI実装リポジトリでは、さらに実装枠の 30%だけを配分します。
             </p>
           </div>
@@ -115,11 +164,12 @@ defineProps<{
         </div>
         <div class="mt-5 rounded-2xl bg-ink px-5 py-4 text-white">
           <p class="overflow-x-auto font-mono text-sm leading-7 whitespace-nowrap">
-            実装配分枠 = 0.65 I × A × G
+            実装配分枠 = 0.65 I × A × G × T
           </p>
           <p class="mt-1 text-sm leading-6 text-white/70">
-            A は独立した品質確認があれば 1、なければ 0.5 です。
+            A は独立した品質確認があれば 1、なければマージ済みは 0.5、未マージは 0 です。
             G はフルAI実装リポジトリなら 0.3、それ以外は 1 です。
+            T はマージ済みなら 1、オープンなら 0.5、クローズ済みなら 0.25 です。
           </p>
         </div>
         <p class="mt-5 rounded-xl bg-paper/70 p-4 text-sm leading-7 text-muted">

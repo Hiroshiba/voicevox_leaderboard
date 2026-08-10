@@ -13,6 +13,7 @@ import {
   calculateImplementationReviewAssurance,
   calculateImplementationStateCredit,
   contributionKindLabel,
+  getPullScoringDate,
   resolvePullOutcomeAtRangeEnd,
 } from "../domain/scoring.ts";
 import type { RangeSelection } from "../services/calculationScope.ts";
@@ -53,6 +54,13 @@ const fullAiCredit = computed(() =>
 const stateCredit = computed(() =>
   calculateImplementationStateCredit(pullAtRangeEnd.value.outcome),
 );
+const scoringDateInRange = computed(() => {
+  const scoringDate = getPullScoringDate(
+    props.pull.createdAt,
+    pullAtRangeEnd.value.outcome,
+  ).slice(0, 10);
+  return scoringDate >= props.range.start && scoringDate <= props.range.end;
+});
 const implementationCreditPercent = computed(() =>
   Math.round(
     fullAiCredit.value.creditRatio *
@@ -63,7 +71,7 @@ const implementationCreditPercent = computed(() =>
 );
 
 const outcomeDateLabel = computed(() => {
-  const outcome = props.pull.outcome;
+  const outcome = pullAtRangeEnd.value.outcome;
   switch (outcome.kind) {
     case "merged":
       return formatDate(outcome.mergedAt) + " にマージ";
@@ -189,12 +197,20 @@ function kindClass(kind: ContributionKind): string {
           {{ fullAiCredit.label }}
         </p>
         <p>
+          <span class="font-semibold text-ink">状態係数</span>
+          選択期間末は{{ stateCredit.label }}のため、実装枠を
+          {{ stateCredit.creditRatio }} 倍にします。
+        </p>
+        <p>
           <span class="font-semibold text-ink">レビュー保証</span>
           {{ reviewAssurance.label }}
         </p>
-        <p>
+        <p v-if="scoringDateInRange">
           この PR に割り当てられた実装枠の
           {{ implementationCreditPercent }}%を作者と共同作者へ配分します。
+        </p>
+        <p v-else>
+          配点対象日が選択期間外のため、この期間は実装枠を配分しません。
         </p>
         <p v-if="pull.fullAiImplementation">
           変更ファイルはすべて生成物として数えます。
@@ -217,8 +233,8 @@ function kindClass(kind: ContributionKind): string {
       </h2>
       <p class="mt-2 mb-5 max-w-3xl text-sm leading-7 text-muted">
         実装とレビューは PR から人物へ直接流れます。
-        Issue・調査は関連 Issue を経由して人物へ流れます。
-        同じ成果に含まれる別の PR がある場合は、その経路も比較できるように表示します。
+        マージ済み PR の Issue・調査は関連 Issue を経由して人物へ流れ、未マージ PR の関連 Issue は独立して採点します。
+        同じ成果に含まれる別のマージ済み PR がある場合は、その経路も比較できるように表示します。
       </p>
       <SankeyDiagram
         v-if="hasSankeyData"
@@ -234,7 +250,7 @@ function kindClass(kind: ContributionKind): string {
           選択期間にはこの PR からの配点がありません
         </p>
         <p class="mt-2 text-sm text-muted">
-          PR のマージ日を含む期間へ変更すると経路を表示できます。
+          配点対象日が期間外、または実装とレビューの配点条件を満たす活動がないためです。
         </p>
       </div>
     </section>

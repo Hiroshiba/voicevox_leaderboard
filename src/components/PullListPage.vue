@@ -1,7 +1,15 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { UnreachableError } from "../domain/errors.ts";
-import type { DateRange, PreparedPull } from "../domain/model.ts";
+import type {
+  DateRange,
+  PreparedPull,
+  PullOutcome,
+} from "../domain/model.ts";
+import {
+  getPullScoringDate,
+  resolvePullOutcomeAtRangeEnd,
+} from "../domain/scoring.ts";
 import type { RangeSelection } from "../services/calculationScope.ts";
 import { routeHref } from "../services/routes.ts";
 
@@ -24,21 +32,30 @@ const pullsInRange = computed(() =>
 );
 
 function pullDate(pull: PreparedPull): string {
-  const outcome = pull.outcome;
+  return getPullScoringDate(pull.createdAt, pullOutcome(pull));
+}
+
+function pullOutcome(pull: PreparedPull): PullOutcome {
+  return resolvePullOutcomeAtRangeEnd(pull.outcome, props.range.end);
+}
+
+function pullDateLabel(pull: PreparedPull): string {
+  const outcome = pullOutcome(pull);
   switch (outcome.kind) {
     case "merged":
-      return outcome.mergedAt;
+      return "マージ日 " + formatDate(outcome.mergedAt);
     case "closed":
-      return outcome.closedAt;
+      return "クローズ日 " + formatDate(outcome.closedAt);
     case "open":
-      return pull.createdAt;
+      return "作成日 " + formatDate(pull.createdAt);
     default:
       throw new UnreachableError(outcome);
   }
 }
 
 function outcomeLabel(pull: PreparedPull): string {
-  switch (pull.outcome.kind) {
+  const outcome = pullOutcome(pull);
+  switch (outcome.kind) {
     case "merged":
       return "マージ済み";
     case "closed":
@@ -46,7 +63,7 @@ function outcomeLabel(pull: PreparedPull): string {
     case "open":
       return "オープン";
     default:
-      throw new UnreachableError(pull.outcome);
+      throw new UnreachableError(outcome);
   }
 }
 
@@ -78,8 +95,8 @@ function formatLines(lines: number): string {
         全 PR
       </h1>
       <p class="mt-3 max-w-2xl text-sm leading-7 text-muted">
-        取得済みの PR {{ pulls.length }} 件を表示しています。
-        状態に対応する日付が選択期間内の PR は {{ pullsInRange }} 件です。
+        取得済みの PR {{ pulls.length }} 件を、選択期間末の状態と配点対象日で表示しています。
+        配点対象日が選択期間内の PR は {{ pullsInRange }} 件です。
       </p>
     </header>
 
@@ -100,7 +117,7 @@ function formatLines(lines: number): string {
               </span>
               <span
                 class="rounded-full px-2 py-0.5 text-[0.7rem] font-semibold"
-                :class="pull.outcome.kind === 'open' ? 'bg-accent-soft text-accent-dark' : 'bg-line/60 text-muted'"
+                :class="pullOutcome(pull).kind === 'open' ? 'bg-accent-soft text-accent-dark' : 'bg-line/60 text-muted'"
               >
                 {{ outcomeLabel(pull) }}
               </span>
@@ -119,7 +136,7 @@ function formatLines(lines: number): string {
             {{ pull.author.login }}
           </p>
           <div class="text-sm text-muted md:text-right">
-            <p>{{ formatDate(pullDate(pull)) }}</p>
+            <p>{{ pullDateLabel(pull) }}</p>
             <p class="mt-1 text-xs">
               有効変更 {{ formatLines(pull.effectiveLines) }} 行
             </p>

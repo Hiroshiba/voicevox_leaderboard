@@ -45,7 +45,7 @@ const segments = computed<BreakdownSegment[]>(() => {
   }));
   const unallocated: BreakdownSegment = {
     kind: "unallocated",
-    label: "未配分",
+    label: "配点対象外",
     points:
       props.breakdown.type === "workstream"
         ? props.breakdown.unallocatedPoints

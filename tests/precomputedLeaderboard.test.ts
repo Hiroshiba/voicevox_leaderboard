@@ -247,7 +247,7 @@ describe("calculateLeaderboard", () => {
 
     expect(workstream.issuePoints).toBe(0);
     expect(issueLoss?.points).toBeCloseTo(workstream.importance * 0.15, 12);
-    expect(issueLoss?.reason).toBe("未マージ PR のため関連 Issue 枠を未配分");
+    expect(issueLoss?.reason).toBe("未マージ PR のため関連 Issue 枠は配点対象外");
   });
 
   it("期間末より後にマージされた PR をオープンとして採点する", () => {
@@ -380,7 +380,7 @@ describe("calculateLeaderboard", () => {
     );
   });
 
-  it("配点と未配分点からワークストリーム重要度を復元できる", () => {
+  it("配点と配点対象外の点からワークストリーム重要度を復元できる", () => {
     const result = calculateLeaderboard(dataset, dataset.range);
     const workstream = result.workstreams[0];
     expect(workstream).toBeDefined();
@@ -402,7 +402,7 @@ describe("calculateLeaderboard", () => {
     expect(workstream.unallocatedEntries).toEqual([
       expect.objectContaining({
         kind: "review",
-        reason: expect.stringContaining("上限 5 に満たないため未配分"),
+        reason: expect.stringContaining("上限 5 に満たないため残りは配点対象外"),
       }),
     ]);
   });
@@ -440,7 +440,7 @@ describe("calculateLeaderboard", () => {
     expect(new Set(traceIds).size).toBe(traceIds.length);
   });
 
-  it("関連 Issue とレビューがない枠を未配分として残す", () => {
+  it("関連 Issue とレビューがない枠を配点対象外とする", () => {
     const independentPull: PreparedMergedPull = {
       ...pull(3, "2026-07-15T00:00:00Z"),
       reviews: [],
@@ -467,16 +467,16 @@ describe("calculateLeaderboard", () => {
     expect(workstream.unallocatedEntries).toEqual([
       expect.objectContaining({
         kind: "review",
-        reason: "配点対象の人間レビューがないため未配分",
+        reason: "配点対象の人間レビューがないためレビュー枠は配点対象外",
       }),
       expect.objectContaining({
         kind: "issue",
-        reason: "関連 Issue がないため未配分",
+        reason: "関連 Issue がないため Issue 枠は配点対象外",
       }),
     ]);
   });
 
-  it("独立した品質確認がない実装枠の半分を未配分にする", () => {
+  it("独立した品質確認がない実装枠の半分を配点対象外とする", () => {
     const unreviewedPull: PreparedMergedPull = {
       ...pull(3, "2026-07-15T00:00:00Z"),
       outcome: {
@@ -548,7 +548,7 @@ describe("calculateLeaderboard", () => {
     );
     expect(fullAiLoss?.points).toBeCloseTo(workstream.importance * 0.455, 12);
     expect(fullAiLoss?.reason).toBe(
-      "フルAI実装リポジトリのため実装枠の70%を未配分",
+      "フルAI実装リポジトリのため実装枠の70%が配点対象外",
     );
   });
 
@@ -597,11 +597,11 @@ describe("calculateLeaderboard", () => {
     );
     expect(qualityLoss?.points).toBeCloseTo(workstream.importance * 0.0975, 12);
     expect(qualityLoss?.reason).toBe(
-      "独立した品質確認なしのため実装枠の15%を未配分",
+      "独立した品質確認なしのため実装枠の15%が配点対象外",
     );
   });
 
-  it("Bot 作者へ渡らない実装枠を未配分として残す", () => {
+  it("Bot 作者へ渡らない実装枠を配点対象外とする", () => {
     const botPull: PreparedMergedPull = {
       ...pull(4, "2026-07-15T00:00:00Z"),
       author: actor("dependabot[bot]"),
@@ -629,7 +629,7 @@ describe("calculateLeaderboard", () => {
       expect.arrayContaining([
         expect.objectContaining({
           kind: "implementation",
-          reason: expect.stringContaining("Bot のため作者分を未配分"),
+          reason: expect.stringContaining("Bot のため作者分は配点対象外"),
         }),
       ]),
     );

@@ -323,7 +323,7 @@ function allocateImplementation(
           pullPool,
           source,
           sourceTitle,
-          "配点対象日 " + scoringDate + " が期間外のため実装枠を未配分",
+          "配点対象日 " + scoringDate + " が期間外のため実装枠は配点対象外",
         ),
       );
       continue;
@@ -377,7 +377,7 @@ function allocateImplementation(
           fullAiCredit.label +
             "のため実装枠の" +
             formatPercent(1 - fullAiCredit.creditRatio) +
-            "%を未配分",
+            "%が配点対象外",
         ),
       );
     }
@@ -396,7 +396,7 @@ function allocateImplementation(
             formatPercent(
               fullAiCredit.creditRatio * (1 - reviewAssurance.creditRatio),
             ) +
-            "%を未配分",
+            "%が配点対象外",
         ),
       );
     }
@@ -416,7 +416,7 @@ function allocateImplementation(
                 reviewAssurance.creditRatio *
                 (1 - stateCredit.creditRatio),
             ) +
-            "%を未配分",
+            "%が配点対象外",
         ),
       );
     }
@@ -444,7 +444,7 @@ function allocateImplementation(
           distributablePullPool * authorRatio,
           source,
           sourceTitle,
-          pull.author.login + " が Bot のため作者分を未配分",
+          pull.author.login + " が Bot のため作者分は配点対象外",
         ),
       );
     }
@@ -524,7 +524,7 @@ function allocateReviews(
           maximumPoints,
           source,
           sourceTitle,
-          "配点対象の人間レビューがないため未配分",
+          "配点対象の人間レビューがないためレビュー枠は配点対象外",
         ),
       ],
     };
@@ -556,7 +556,7 @@ function allocateReviews(
               sourceTitle,
               "レビュー重み " +
                 totalWeight.toFixed(2) +
-                " が上限 5 に満たないため未配分",
+                " が上限 5 に満たないため残りは配点対象外",
             ),
           ],
   };
@@ -581,7 +581,7 @@ function allocateLinkedIssue(
           maximumPoints,
           source,
           sourceTitle,
-          "未マージ PR のため関連 Issue 枠を未配分",
+          "未マージ PR のため関連 Issue 枠は配点対象外",
         ),
       ],
     };
@@ -596,7 +596,7 @@ function allocateLinkedIssue(
           maximumPoints,
           source,
           sourceTitle,
-          "関連 Issue がないため未配分",
+          "関連 Issue がないため Issue 枠は配点対象外",
         ),
       ],
     };
@@ -615,7 +615,7 @@ function allocateLinkedIssue(
           maximumPoints,
           source,
           sourceTitle,
-          "期間内に配点対象の Issue 活動がないため未配分",
+          "期間内に配点対象の Issue 活動がないため Issue 枠は配点対象外",
         ),
       ],
     };
@@ -1043,7 +1043,7 @@ function createUnallocatedScore(
   reason: string,
 ): UnallocatedScore {
   if (points <= 0) {
-    throw new Error("未配分点が正の値ではありません。");
+    throw new Error("配点対象外の点が正の値ではありません。");
   }
   return {
     id,
@@ -1145,7 +1145,7 @@ function assertScoreConservation(
   if (Math.abs(importance - accountedPoints) > tolerance) {
     throw new Error(
       workstreamKey +
-        " の重要度と配点済み・未配分の合計が一致しません。重要度 " +
+        " の重要度が人物への配点と配点対象外の点の合計と一致しません。重要度 " +
         importance +
         "、追跡済み " +
         accountedPoints,

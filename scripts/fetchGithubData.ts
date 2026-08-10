@@ -2,10 +2,11 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import { isAutomatedAccountLogin } from "../src/domain/actors.ts";
 import { leaderboardDatasetSchema } from "../src/domain/dataset.ts";
-import { assertNonNullable } from "../src/domain/errors.ts";
+import { assertNonNullable, UnreachableError } from "../src/domain/errors.ts";
 import {
   detectEvidenceKinds,
   isSubstantiveIssueText,
@@ -22,6 +23,7 @@ import type {
   PreparedIssue,
   PreparedPull,
   PreparedReviewState,
+  PullOutcome,
 } from "../src/domain/model.ts";
 import {
   extractClosingReferences,
@@ -111,6 +113,9 @@ const pullSchema = z.object({
   title: z.string(),
   body: z.string().nullable(),
   html_url: z.string().url(),
+  created_at: z.string().datetime(),
+  state: z.enum(["open", "closed"]),
+  closed_at: z.string().datetime().nullable(),
   user: userSchema.nullable(),
   merged_by: userSchema.nullable(),
   merged_at: z.string().datetime().nullable(),
@@ -262,6 +267,7 @@ type GithubPullCommit = z.infer<typeof pullCommitSchema>;
 type GithubIssue = z.infer<typeof issueSchema>;
 type GithubIssueComment = z.infer<typeof issueCommentSchema>;
 type CacheEntry = z.infer<typeof cacheEntrySchema>;
+type SearchKind = "mergedPull" | "unmergedPull" | "issue";
 
 interface CliOptions {
   range: DateRange;
@@ -415,8 +421,8 @@ class GitHubApiClient {
     );
   }
 
-  /** マージ済み PR の変更ファイルを GraphQL API から取得する。 */
-  async requestMergedPullFiles(
+  /** PR の変更ファイルを GraphQL API から取得する。 */
+  async requestPullFiles(
     repository: string,
     number: number,
     maxPages: number,
@@ -830,7 +836,7 @@ class DatasetBuilder {
         createKey(target.repository, target.number) +
           " は REST API が差分を生成できないため GraphQL API から変更ファイルを取得します。",
       );
-      return this.client.requestMergedPullFiles(
+      return this.client.requestPullFiles(
         target.repository,
         target.number,
         31,
@@ -981,7 +987,7 @@ async function main(): Promise<void> {
     searchTargets(client, "issue", options.range, repositoryKeys),
   ]);
   console.log(
-    "マージ済み PR " +
+    "PR " +
       pullTargets.length +
       " 件、活動 Issue " +
       issueTargets.length +
@@ -1026,7 +1032,7 @@ async function main(): Promise<void> {
   );
 
   const dataset: LeaderboardDataset = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     organization,
     generatedAt: new Date().toISOString(),
     range: options.range,
@@ -1085,7 +1091,13 @@ async function searchTargets(
   range: DateRange,
   repositoryKeys: Set<string>,
 ): Promise<Target[]> {
-  const items = await searchRange(client, kind, range);
+  const searchKinds: SearchKind[] =
+    kind === "pull" ? ["mergedPull", "unmergedPull"] : ["issue"];
+  const items = (
+    await Promise.all(
+      searchKinds.map((searchKind) => searchRange(client, searchKind, range)),
+    )
+  ).flat();
   const targets = new Map<string, Target>();
   for (const item of items) {
     const repository = repositoryFromApiUrl(item.repository_url);
@@ -1108,7 +1120,7 @@ async function searchTargets(
 
 async function searchRange(
   client: GitHubApiClient,
-  kind: "pull" | "issue",
+  kind: SearchKind,
   range: DateRange,
 ): Promise<SearchResult["items"]> {
   const query = createSearchQuery(kind, range);
@@ -1163,37 +1175,32 @@ async function searchPage(
   );
 }
 
-function createSearchQuery(kind: "pull" | "issue", range: DateRange): string {
-  if (kind === "pull") {
-    return (
-      "org:VOICEVOX is:pr is:merged merged:" + range.start + ".." + range.end
-    );
+function createSearchQuery(kind: SearchKind, range: DateRange): string {
+  const dateRange = range.start + ".." + range.end;
+  switch (kind) {
+    case "mergedPull":
+      return "org:VOICEVOX is:pr is:merged merged:" + dateRange;
+    case "unmergedPull":
+      return "org:VOICEVOX is:pr -is:merged updated:" + dateRange;
+    case "issue":
+      return "org:VOICEVOX is:issue updated:" + dateRange;
+    default:
+      throw new UnreachableError(kind);
   }
-  return "org:VOICEVOX is:issue updated:" + range.start + ".." + range.end;
 }
 
-function preparePull(
+/** GitHub API の PR データを事前取得データへ変換する。 */
+export function preparePull(
   bundle: PullBundle,
   resolvedIssue: ResolvedIssue | undefined,
   fullAiImplementation: boolean,
 ): PreparedPull {
-  const mergedAt = bundle.pull.merged_at;
-  assertNonNullable(
-    mergedAt,
-    createKey(bundle.repository, bundle.pull.number) +
-      " はマージ済みですが merged_at がありません。",
-  );
+  const key = createKey(bundle.repository, bundle.pull.number);
+  const outcome = preparePullOutcome(bundle.pull, key);
   const author = bundle.pull.user;
   assertNonNullable(
     author,
-    createKey(bundle.repository, bundle.pull.number) +
-      " の作者を取得できません。",
-  );
-  const mergedBy = bundle.pull.merged_by;
-  assertNonNullable(
-    mergedBy,
-    createKey(bundle.repository, bundle.pull.number) +
-      " はマージ済みですがマージ者を取得できません。",
+    key + " の作者を取得できません。",
   );
   const files = bundle.files.map((file) =>
     calculateFileScore(file, fullAiImplementation),
@@ -1202,16 +1209,15 @@ function preparePull(
   const nonGeneratedFiles = files.filter((file) => file.generated === false).length;
   const body = bundle.pull.body ?? "";
   return {
-    key: createKey(bundle.repository, bundle.pull.number),
+    key,
     repository: bundle.repository,
     number: bundle.pull.number,
     title: bundle.pull.title,
     githubUrl: bundle.pull.html_url,
-    mergedAt,
+    createdAt: bundle.pull.created_at,
+    outcome,
     author: toActor(author),
     authorIsHuman: isHumanUser(author),
-    mergedBy: toActor(mergedBy),
-    mergedByIsHuman: isHumanUser(mergedBy),
     coauthors: extractCoauthors(bundle.commits, author.login),
     files,
     effectiveLines,
@@ -1266,6 +1272,35 @@ function preparePull(
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
     ...(resolvedIssue == null ? {} : { issueKey: resolvedIssue.key }),
   };
+}
+
+function preparePullOutcome(pull: GithubPull, key: string): PullOutcome {
+  if (pull.merged_at != null) {
+    const mergedBy = pull.merged_by;
+    assertNonNullable(
+      mergedBy,
+      key + " はマージ済みですがマージ者を取得できません。",
+    );
+    return {
+      kind: "merged",
+      mergedAt: pull.merged_at,
+      mergedBy: toActor(mergedBy),
+      mergedByIsHuman: isHumanUser(mergedBy),
+    };
+  }
+
+  switch (pull.state) {
+    case "closed":
+      assertNonNullable(
+        pull.closed_at,
+        key + " はクローズ済みですが closed_at がありません。",
+      );
+      return { kind: "closed", closedAt: pull.closed_at };
+    case "open":
+      return { kind: "open" };
+    default:
+      throw new UnreachableError(pull.state);
+  }
 }
 
 function parsePreparedReviewState(state: string): PreparedReviewState {
@@ -1622,4 +1657,10 @@ async function wait(milliseconds: number): Promise<void> {
   });
 }
 
-await main();
+const executedPath = process.argv[1];
+if (
+  executedPath != null &&
+  import.meta.url === pathToFileURL(executedPath).href
+) {
+  await main();
+}

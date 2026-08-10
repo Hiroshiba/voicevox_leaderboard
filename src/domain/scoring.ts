@@ -2,6 +2,7 @@ import { UnreachableError } from "./errors.ts";
 import type {
   ContributionKind,
   FileScore,
+  PreparedMergedPull,
   PreparedPull,
   ScoreAllocation,
   WorkstreamScore,
@@ -134,14 +135,15 @@ export function calculateFullAiImplementationCredit(
 
 /** PR の独立したレビュー保証と実装枠の配分率を決める。 */
 export function calculateImplementationReviewAssurance(
-  pull: PreparedPull,
+  pull: PreparedMergedPull,
 ): ImplementationReviewAssurance {
+  const outcome = pull.outcome;
   const authorLogin = pull.author.login.toLowerCase();
   const isIndependent = (login: string): boolean =>
     login.toLowerCase() !== authorLogin;
   const independentReviews = pull.reviews.filter(
     (review) =>
-      isTimestampAtOrBefore(review.submittedAt, pull.mergedAt) &&
+      isTimestampAtOrBefore(review.submittedAt, outcome.mergedAt) &&
       isIndependent(review.actor.login),
   );
   const hasApproval = independentReviews.some(
@@ -151,11 +153,11 @@ export function calculateImplementationReviewAssurance(
     independentReviews.some((review) => review.hasSubstantiveSummary) ||
     pull.reviewThreads.some(
       (thread) =>
-        isTimestampAtOrBefore(thread.createdAt, pull.mergedAt) &&
+        isTimestampAtOrBefore(thread.createdAt, outcome.mergedAt) &&
         isIndependent(thread.actor.login),
     );
   const hasIndependentMerger =
-    pull.mergedByIsHuman && isIndependent(pull.mergedBy.login);
+    outcome.mergedByIsHuman && isIndependent(outcome.mergedBy.login);
 
   if (hasApproval) {
     return {

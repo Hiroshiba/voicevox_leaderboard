@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import { UnreachableError } from "../domain/errors.ts";
 import type { DateRange, PreparedPull } from "../domain/model.ts";
 import type { RangeSelection } from "../services/calculationScope.ts";
 import { routeHref } from "../services/routes.ts";
@@ -13,14 +14,41 @@ const props = defineProps<{
 const sortedPulls = computed(() =>
   props.pulls.toSorted(
     (left, right) =>
-      right.mergedAt.localeCompare(left.mergedAt) ||
+      pullDate(right).localeCompare(pullDate(left)) ||
       left.key.localeCompare(right.key),
   ),
 );
 
 const pullsInRange = computed(() =>
-  sortedPulls.value.filter((pull) => isInRange(pull.mergedAt)).length,
+  sortedPulls.value.filter((pull) => isInRange(pullDate(pull))).length,
 );
+
+function pullDate(pull: PreparedPull): string {
+  const outcome = pull.outcome;
+  switch (outcome.kind) {
+    case "merged":
+      return outcome.mergedAt;
+    case "closed":
+      return outcome.closedAt;
+    case "open":
+      return pull.createdAt;
+    default:
+      throw new UnreachableError(outcome);
+  }
+}
+
+function outcomeLabel(pull: PreparedPull): string {
+  switch (pull.outcome.kind) {
+    case "merged":
+      return "マージ済み";
+    case "closed":
+      return "クローズ済み";
+    case "open":
+      return "オープン";
+    default:
+      throw new UnreachableError(pull.outcome);
+  }
+}
 
 function isInRange(timestamp: string): boolean {
   const date = timestamp.slice(0, 10);
@@ -50,8 +78,8 @@ function formatLines(lines: number): string {
         全 PR
       </h1>
       <p class="mt-3 max-w-2xl text-sm leading-7 text-muted">
-        取得済みのマージ済み PR {{ pulls.length }} 件を表示しています。
-        選択期間内にマージされた PR は {{ pullsInRange }} 件です。
+        取得済みの PR {{ pulls.length }} 件を表示しています。
+        状態に対応する日付が選択期間内の PR は {{ pullsInRange }} 件です。
       </p>
     </header>
 
@@ -72,9 +100,15 @@ function formatLines(lines: number): string {
               </span>
               <span
                 class="rounded-full px-2 py-0.5 text-[0.7rem] font-semibold"
-                :class="isInRange(pull.mergedAt) ? 'bg-accent-soft text-accent-dark' : 'bg-line/60 text-muted'"
+                :class="pull.outcome.kind === 'open' ? 'bg-accent-soft text-accent-dark' : 'bg-line/60 text-muted'"
               >
-                {{ isInRange(pull.mergedAt) ? "期間内" : "期間外" }}
+                {{ outcomeLabel(pull) }}
+              </span>
+              <span
+                class="rounded-full px-2 py-0.5 text-[0.7rem] font-semibold"
+                :class="isInRange(pullDate(pull)) ? 'bg-accent-soft text-accent-dark' : 'bg-line/60 text-muted'"
+              >
+                {{ isInRange(pullDate(pull)) ? "期間内" : "期間外" }}
               </span>
             </div>
             <p class="mt-1 font-semibold leading-6">
@@ -85,7 +119,7 @@ function formatLines(lines: number): string {
             {{ pull.author.login }}
           </p>
           <div class="text-sm text-muted md:text-right">
-            <p>{{ formatDate(pull.mergedAt) }}</p>
+            <p>{{ formatDate(pullDate(pull)) }}</p>
             <p class="mt-1 text-xs">
               有効変更 {{ formatLines(pull.effectiveLines) }} 行
             </p>

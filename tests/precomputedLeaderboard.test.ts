@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type {
   Actor,
   LeaderboardDataset,
-  PreparedPull,
+  PreparedMergedPull,
 } from "../src/domain/model";
 import { calculateLeaderboard } from "../src/services/calculateLeaderboard";
 
@@ -12,7 +12,7 @@ const carol = actor("carol");
 const dave = actor("dave");
 
 const dataset: LeaderboardDataset = {
-  schemaVersion: 3,
+  schemaVersion: 4,
   organization: "VOICEVOX",
   generatedAt: "2026-08-02T00:00:00Z",
   range: {
@@ -97,6 +97,30 @@ describe("calculateLeaderboard", () => {
     ]);
   });
 
+  it("未マージ PR を計算へ含めない", () => {
+    const unmergedDataset: LeaderboardDataset = {
+      ...dataset,
+      pulls: [
+        ...dataset.pulls,
+        {
+          ...pull(3, "2026-07-15T00:00:00Z"),
+          outcome: { kind: "open" },
+        },
+        {
+          ...pull(4, "2026-07-16T00:00:00Z"),
+          outcome: {
+            kind: "closed",
+            closedAt: "2026-07-16T00:00:00Z",
+          },
+        },
+      ],
+    };
+
+    expect(calculateLeaderboard(unmergedDataset, dataset.range)).toEqual(
+      calculateLeaderboard(dataset, dataset.range),
+    );
+  });
+
   it("取得統計が異なっても計算結果を変えない", () => {
     const cachedDataset: LeaderboardDataset = {
       ...dataset,
@@ -173,7 +197,7 @@ describe("calculateLeaderboard", () => {
   });
 
   it("関連 Issue とレビューがない枠を未配分として残す", () => {
-    const independentPull: PreparedPull = {
+    const independentPull: PreparedMergedPull = {
       ...pull(3, "2026-07-15T00:00:00Z"),
       reviews: [],
       reviewThreads: [],
@@ -209,9 +233,14 @@ describe("calculateLeaderboard", () => {
   });
 
   it("独立した品質確認がない実装枠の半分を未配分にする", () => {
-    const unreviewedPull: PreparedPull = {
+    const unreviewedPull: PreparedMergedPull = {
       ...pull(3, "2026-07-15T00:00:00Z"),
-      mergedBy: alice,
+      outcome: {
+        kind: "merged",
+        mergedAt: "2026-07-15T00:00:00Z",
+        mergedBy: alice,
+        mergedByIsHuman: true,
+      },
       reviews: [],
       reviewThreads: [],
       issueKey: undefined,
@@ -247,7 +276,7 @@ describe("calculateLeaderboard", () => {
   });
 
   it("フルAI実装リポジトリの実装枠を 30%だけ配分する", () => {
-    const fullAiPull: PreparedPull = {
+    const fullAiPull: PreparedMergedPull = {
       ...pull(6, "2026-07-15T00:00:00Z"),
       fullAiImplementation: true,
       issueKey: undefined,
@@ -280,10 +309,15 @@ describe("calculateLeaderboard", () => {
   });
 
   it("フルAI実装リポジトリの未レビュー PR へ両方の配分率を掛ける", () => {
-    const fullAiPull: PreparedPull = {
+    const fullAiPull: PreparedMergedPull = {
       ...pull(7, "2026-07-15T00:00:00Z"),
       fullAiImplementation: true,
-      mergedBy: alice,
+      outcome: {
+        kind: "merged",
+        mergedAt: "2026-07-15T00:00:00Z",
+        mergedBy: alice,
+        mergedByIsHuman: true,
+      },
       reviews: [],
       reviewThreads: [],
       issueKey: undefined,
@@ -324,7 +358,7 @@ describe("calculateLeaderboard", () => {
   });
 
   it("Bot 作者へ渡らない実装枠を未配分として残す", () => {
-    const botPull: PreparedPull = {
+    const botPull: PreparedMergedPull = {
       ...pull(4, "2026-07-15T00:00:00Z"),
       author: actor("dependabot[bot]"),
       authorIsHuman: false,
@@ -358,7 +392,7 @@ describe("calculateLeaderboard", () => {
   });
 
   it("レビューの加点を参加、総評、個別スレッドへ分ける", () => {
-    const reviewedPull: PreparedPull = {
+    const reviewedPull: PreparedMergedPull = {
       ...pull(5, "2026-07-15T00:00:00Z"),
       reviewThreads: [
         {
@@ -409,18 +443,22 @@ describe("calculateLeaderboard", () => {
   });
 });
 
-function pull(number: number, mergedAt: string): PreparedPull {
+function pull(number: number, mergedAt: string): PreparedMergedPull {
   return {
     key: "voicevox/voicevox#" + number,
     repository: "VOICEVOX/voicevox",
     number,
     title: "feat: 音声合成を改善する",
     githubUrl: "https://github.com/VOICEVOX/voicevox/pull/" + number,
-    mergedAt,
+    createdAt: mergedAt,
+    outcome: {
+      kind: "merged",
+      mergedAt,
+      mergedBy: bob,
+      mergedByIsHuman: true,
+    },
     author: alice,
     authorIsHuman: true,
-    mergedBy: bob,
-    mergedByIsHuman: true,
     coauthors: [],
     files: [
       {

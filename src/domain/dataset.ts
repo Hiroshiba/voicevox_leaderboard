@@ -32,11 +32,26 @@ const preparedPullSchema = z.object({
   number: z.number().int().positive(),
   title: z.string(),
   githubUrl: z.string().url(),
-  mergedAt: dateTimeSchema,
+  createdAt: dateTimeSchema,
+  outcome: z.discriminatedUnion("kind", [
+    z
+      .object({
+        kind: z.literal("merged"),
+        mergedAt: dateTimeSchema,
+        mergedBy: actorSchema,
+        mergedByIsHuman: z.boolean(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("closed"),
+        closedAt: dateTimeSchema,
+      })
+      .strict(),
+    z.object({ kind: z.literal("open") }).strict(),
+  ]),
   author: actorSchema,
   authorIsHuman: z.boolean(),
-  mergedBy: actorSchema,
-  mergedByIsHuman: z.boolean(),
   coauthors: z.array(actorSchema),
   files: z.array(fileScoreSchema),
   effectiveLines: z.number().nonnegative(),
@@ -87,7 +102,7 @@ const preparedIssueSchema = z.object({
 });
 
 export const leaderboardDatasetSchema = z.object({
-  schemaVersion: z.literal(3),
+  schemaVersion: z.literal(4),
   organization: z.literal("VOICEVOX"),
   generatedAt: dateTimeSchema,
   range: z.object({

@@ -31,21 +31,16 @@ function formatScore(score: number): string {
 
 <template>
   <section aria-labelledby="leaderboard-heading">
-    <div class="mb-5 flex flex-wrap items-end justify-between gap-3">
-      <div>
-        <p class="mb-1 text-xs font-semibold tracking-[0.18em] text-accent uppercase">
-          Contribution ranking
-        </p>
-        <h2
-          id="leaderboard-heading"
-          class="font-display text-2xl font-semibold"
-        >
-          貢献者リーダーボード
-        </h2>
-      </div>
-      <p class="text-sm text-muted">
-        {{ result.range.start }} — {{ result.range.end }}
+    <div class="mb-5">
+      <p class="mb-1 text-xs font-semibold tracking-[0.18em] text-accent uppercase">
+        Contribution ranking
       </p>
+      <h2
+        id="leaderboard-heading"
+        class="font-display text-2xl font-semibold"
+      >
+        貢献者リーダーボード
+      </h2>
     </div>
 
     <div

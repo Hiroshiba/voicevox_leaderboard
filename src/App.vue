@@ -360,7 +360,7 @@ function resolveLocationRange(
 }
 
 function createInitialRangeSelection(): RangeSelection {
-  return { type: "relative", count: 30, unit: "day" };
+  return { type: "relative", count: 7, unit: "day" };
 }
 
 function rangesEqual(left: DateRange, right: DateRange): boolean {
@@ -619,13 +619,11 @@ function describeError(error: unknown): string {
         v-else-if="appLocation.route.name === 'methodology'"
         :notices="readyState.dataset.notices"
         :full-ai-repositories="fullAiRepositories"
-        :range="readyState.result.range"
       />
 
       <PersonPage
         v-else-if="appLocation.route.name === 'person' && currentContributor != null"
         :contributor="currentContributor"
-        :range="readyState.result.range"
         :result="readyState.result"
         :range-selection="readyState.rangeSelection"
       />

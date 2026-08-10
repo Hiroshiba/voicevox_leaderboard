@@ -44,22 +44,17 @@ function formatDate(value: string): string {
 
 <template>
   <main class="mx-auto max-w-7xl px-5 py-10 sm:px-8 sm:py-14">
-    <header class="flex flex-wrap items-end justify-between gap-4">
-      <div>
-        <p class="text-xs font-semibold tracking-[0.18em] text-accent uppercase">
-          Issues
-        </p>
-        <h1 class="mt-2 font-display text-3xl font-semibold">
-          全 Issue
-        </h1>
-        <p class="mt-3 max-w-2xl text-sm leading-7 text-muted">
-          取得済みの Issue {{ issues.length }} 件を表示しています。
-          選択期間内に作成、Close、コメントのいずれかがあった Issue は
-          {{ issuesWithActivityInRange }} 件です。
-        </p>
-      </div>
-      <p class="text-sm text-muted">
-        {{ range.start }} — {{ range.end }}
+    <header>
+      <p class="text-xs font-semibold tracking-[0.18em] text-accent uppercase">
+        Issues
+      </p>
+      <h1 class="mt-2 font-display text-3xl font-semibold">
+        全 Issue
+      </h1>
+      <p class="mt-3 max-w-2xl text-sm leading-7 text-muted">
+        取得済みの Issue {{ issues.length }} 件を表示しています。
+        選択期間内に作成、Close、コメントのいずれかがあった Issue は
+        {{ issuesWithActivityInRange }} 件です。
       </p>
     </header>
 

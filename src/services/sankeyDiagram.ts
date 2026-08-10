@@ -760,7 +760,7 @@ function assertWorkstreamConservation(workstream: WorkstreamScore): void {
   assertNearlyEqual(
     workstream.unallocatedPoints,
     unallocatedPoints,
-    workstream.key + " の未配分点と明細の合計が一致しません。",
+    workstream.key + " の配点対象外の点と明細の合計が一致しません。",
   );
   assertNearlyEqual(
     workstream.importance,

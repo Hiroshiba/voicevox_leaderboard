@@ -122,7 +122,7 @@ function kindClass(kind: ContributionKind): string {
         左列の PR、中列の Issue、右列の人物をたどって配点元を確認できます。
         実装とレビューは PR から人物へ直接つながるため、Issue の列を飛び越えます。
         Issue・調査は関連 PR から Issue を経て人物へつながり、独立 Issue は中列から始まります。
-        同じ PR、Issue、人物は一つのノードにまとめ、未配分点は表示しません。
+        同じ PR、Issue、人物は一つのノードにまとめ、配点対象外の点は表示しません。
       </p>
       <SankeyDiagram
         :result="result"

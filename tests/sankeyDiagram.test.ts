@@ -66,7 +66,7 @@ const reviewLoss = unallocated(
   2,
   "issue",
   "voicevox/voicevox#10",
-  "レビュー重みが上限に満たないため未配分",
+  "レビュー重みが上限に満たないため残りは配点対象外",
 );
 const issueLoss = unallocated(
   "workstream:issue-loss",
@@ -74,7 +74,7 @@ const issueLoss = unallocated(
   1,
   "issue",
   "voicevox/voicevox#10",
-  "Issue 枠の未配分",
+  "Issue 枠は配点対象外",
 );
 const aliceStandaloneIssue = allocation(
   "standalone:alice",
@@ -221,7 +221,7 @@ describe("createSankeyDiagramLayout", () => {
     expect(layout.contributorCount).toBe(2);
   });
 
-  it("未配分点をノードにもリンクにも含めない", () => {
+  it("配点対象外の点をノードにもリンクにも含めない", () => {
     const layout = createSankeyDiagramLayout(
       result,
       contributorSelection,

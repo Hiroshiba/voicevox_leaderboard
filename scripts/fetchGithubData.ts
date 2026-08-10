@@ -1049,6 +1049,8 @@ async function main(): Promise<void> {
     issues,
     notices: [
       "対象は VOICEVOX Organization の公開かつ非アーカイブな全リポジトリです。fork と mirror も含みます。",
+      "PR は選択期間の末日時点の状態で判定し、実装枠をマージ済みは 1 倍、オープンは 0.5 倍、クローズ済みは 0.25 倍にします。",
+      "未マージ PR は独立した品質確認がなければ実装枠を配分せず、関連 Issue 枠も配分しません。",
       "Issue の作成、Close、コメントは選択期間内のイベントだけを配点します。",
       "古い Issue の本文編集日時は特定できないため、本文の証拠要素は Issue 作成日が選択期間内の場合だけ数えます。",
       "複数 PR の Conventional Commits 補正は、PR 分割による加点を防ぐため最大値を一度だけ使います。",

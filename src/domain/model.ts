@@ -50,17 +50,26 @@ export interface PreparedReviewThread {
   createdAt: string;
 }
 
+export type PullOutcome =
+  | {
+      kind: "merged";
+      mergedAt: string;
+      mergedBy: Actor;
+      mergedByIsHuman: boolean;
+    }
+  | { kind: "closed"; closedAt: string }
+  | { kind: "open" };
+
 export interface PreparedPull {
   key: string;
   repository: string;
   number: number;
   title: string;
   githubUrl: string;
-  mergedAt: string;
+  createdAt: string;
+  outcome: PullOutcome;
   author: Actor;
   authorIsHuman: boolean;
-  mergedBy: Actor;
-  mergedByIsHuman: boolean;
   coauthors: Actor[];
   files: FileScore[];
   effectiveLines: number;
@@ -72,6 +81,10 @@ export interface PreparedPull {
   reviewThreads: PreparedReviewThread[];
   issueKey?: string | undefined;
 }
+
+export type PreparedMergedPull = PreparedPull & {
+  outcome: Extract<PullOutcome, { kind: "merged" }>;
+};
 
 export interface PreparedIssueComment {
   actor?: Actor | undefined;
@@ -107,7 +120,7 @@ export interface AcquisitionStats {
 }
 
 export interface LeaderboardDataset {
-  schemaVersion: 3;
+  schemaVersion: 4;
   organization: "VOICEVOX";
   generatedAt: string;
   range: DateRange;

@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import { UnreachableError } from "../domain/errors.ts";
 import type {
   ContributionKind,
   DateRange,
   LeaderboardResult,
+  PreparedMergedPull,
   PreparedPull,
   WorkstreamScore,
 } from "../domain/model.ts";
@@ -34,17 +36,42 @@ const hasSankeyData = computed(
   () =>
     props.workstream != null && props.workstream.allocations.length > 0,
 );
-const reviewAssurance = computed(() =>
-  calculateImplementationReviewAssurance(props.pull),
-);
+const reviewAssurance = computed(() => {
+  if (isMergedPull(props.pull) === false) {
+    return undefined;
+  }
+  return calculateImplementationReviewAssurance(props.pull);
+});
 const fullAiCredit = computed(() =>
   calculateFullAiImplementationCredit(props.pull),
 );
-const implementationCreditPercent = computed(() =>
-  Math.round(
-    fullAiCredit.value.creditRatio * reviewAssurance.value.creditRatio * 100,
-  ),
-);
+const implementationCreditPercent = computed(() => {
+  const assurance = reviewAssurance.value;
+  if (assurance == null) {
+    return undefined;
+  }
+  return Math.round(
+    fullAiCredit.value.creditRatio * assurance.creditRatio * 100,
+  );
+});
+
+const outcomeDateLabel = computed(() => {
+  const outcome = props.pull.outcome;
+  switch (outcome.kind) {
+    case "merged":
+      return formatDate(outcome.mergedAt) + " にマージ";
+    case "closed":
+      return formatDate(outcome.closedAt) + " にクローズ";
+    case "open":
+      return formatDate(props.pull.createdAt) + " に作成";
+    default:
+      throw new UnreachableError(outcome);
+  }
+});
+
+function isMergedPull(pull: PreparedPull): pull is PreparedMergedPull {
+  return pull.outcome.kind === "merged";
+}
 
 function formatScore(score: number): string {
   return score.toFixed(2);
@@ -106,7 +133,7 @@ function kindClass(kind: ContributionKind): string {
           >
           {{ pull.author.login }}
         </a>
-        <span>{{ formatDate(pull.mergedAt) }} にマージ</span>
+        <span>{{ outcomeDateLabel }}</span>
         <a
           :href="pull.githubUrl"
           target="_blank"
@@ -151,7 +178,10 @@ function kindClass(kind: ContributionKind): string {
           </dd>
         </div>
       </dl>
-      <div class="mt-4 rounded-xl bg-paper/70 px-4 py-3 text-sm leading-6 text-muted">
+      <div
+        v-if="reviewAssurance != null && implementationCreditPercent != null"
+        class="mt-4 rounded-xl bg-paper/70 px-4 py-3 text-sm leading-6 text-muted"
+      >
         <p>
           <span class="font-semibold text-ink">実装体制</span>
           {{ fullAiCredit.label }}

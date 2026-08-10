@@ -11,23 +11,28 @@ import {
 } from "../src/domain/scoring";
 import type {
   Actor,
+  PreparedMergedPull,
   PreparedPull,
   ScoreAllocation,
 } from "../src/domain/model";
 
 const alice = actor("alice");
 const bob = actor("bob");
-const basePull: PreparedPull = {
+const basePull: PreparedMergedPull = {
   key: "voicevox/voicevox#1",
   repository: "VOICEVOX/voicevox",
   number: 1,
   title: "feat: 音声合成を改善する",
   githubUrl: "https://github.com/VOICEVOX/voicevox/pull/1",
-  mergedAt: "2026-07-10T00:00:00Z",
+  createdAt: "2026-07-01T00:00:00Z",
+  outcome: {
+    kind: "merged",
+    mergedAt: "2026-07-10T00:00:00Z",
+    mergedBy: alice,
+    mergedByIsHuman: true,
+  },
   author: alice,
   authorIsHuman: true,
-  mergedBy: alice,
-  mergedByIsHuman: true,
   coauthors: [],
   files: [],
   effectiveLines: 20,
@@ -183,7 +188,10 @@ describe("calculateImplementationReviewAssurance", () => {
   it("作者以外の人間がマージしていれば暗黙の確認として扱う", () => {
     const assurance = calculateImplementationReviewAssurance({
       ...basePull,
-      mergedBy: bob,
+      outcome: {
+        ...basePull.outcome,
+        mergedBy: bob,
+      },
     });
 
     expect(assurance).toMatchObject({

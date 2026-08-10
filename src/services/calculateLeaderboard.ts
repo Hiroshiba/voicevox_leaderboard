@@ -8,6 +8,7 @@ import type {
   LeaderboardDataset,
   LeaderboardResult,
   PreparedIssue,
+  PreparedMergedPull,
   PreparedPull,
   ScoreAllocation,
   ScoreEntry,
@@ -28,7 +29,7 @@ import { parseDateRange } from "./calculationScope.ts";
 interface WorkstreamGroup {
   key: string;
   issue?: PreparedIssue;
-  pulls: PreparedPull[];
+  pulls: PreparedMergedPull[];
 }
 
 interface WeightedOrigin {
@@ -77,8 +78,10 @@ export function calculateLeaderboard(
   const issueByKey = new Map(
     dataset.issues.map((issue) => [issue.key, issue]),
   );
-  const pulls = dataset.pulls.filter((pull) =>
-    isDateInRange(pull.mergedAt, range),
+  const pulls = dataset.pulls.filter(
+    (pull): pull is PreparedMergedPull =>
+      pull.outcome.kind === "merged" &&
+      isDateInRange(pull.outcome.mergedAt, range),
   );
   const groups = groupWorkstreams(pulls, issueByKey);
   const workstreams = groups
@@ -116,7 +119,7 @@ export function calculateLeaderboard(
 }
 
 function groupWorkstreams(
-  pulls: PreparedPull[],
+  pulls: PreparedMergedPull[],
   issueByKey: Map<string, PreparedIssue>,
 ): WorkstreamGroup[] {
   const groups = new Map<string, WorkstreamGroup>();

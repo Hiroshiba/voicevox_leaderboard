@@ -3,7 +3,6 @@ import { computed } from "vue";
 import type {
   ContributionKind,
   ContributorScore,
-  DateRange,
   LeaderboardResult,
 } from "../domain/model.ts";
 import { contributionKindLabel } from "../domain/scoring.ts";
@@ -15,7 +14,6 @@ import ScoreBreakdownBar from "./ScoreBreakdownBar.vue";
 
 const props = defineProps<{
   contributor: ContributorScore;
-  range: DateRange;
   result: LeaderboardResult;
   rangeSelection: RangeSelection;
 }>();
@@ -68,7 +66,7 @@ function kindClass(kind: ContributionKind): string {
               {{ contributor.login }}
             </h1>
             <p class="mt-1 text-sm text-muted">
-              {{ range.start }} — {{ range.end }} ・ {{ contributor.rank }} 位
+              {{ contributor.rank }} 位
             </p>
           </div>
         </div>

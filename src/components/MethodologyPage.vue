@@ -1,10 +1,7 @@
 <script setup lang="ts">
-import type { DateRange } from "../domain/model.ts";
-
 defineProps<{
   notices: string[];
   fullAiRepositories: string[];
-  range: DateRange;
 }>();
 </script>
 
@@ -18,7 +15,7 @@ defineProps<{
         計算式
       </h1>
       <p class="mt-4 max-w-3xl text-sm leading-7 text-muted">
-        {{ range.start }} — {{ range.end }} に発生した GitHub 上の活動を、次の規則で一つの点数へ変換します。
+        対象期間に発生した GitHub 上の活動を、次の規則で一つの点数へ変換します。
         PR のマージ日とレビュー日時、Issue の作成、Close、コメント日時を期間判定に使います。
       </p>
     </header>

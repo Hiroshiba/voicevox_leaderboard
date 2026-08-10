@@ -2,8 +2,8 @@ import { UnreachableError } from "./errors.ts";
 import type {
   ContributionKind,
   FileScore,
-  PreparedMergedPull,
   PreparedPull,
+  PullOutcome,
   ScoreAllocation,
   WorkstreamScore,
 } from "./model.ts";
@@ -45,7 +45,24 @@ type ImplementationReviewAssurance =
     }
   | {
       type: "unreviewed";
+      creditRatio: 0 | 0.5;
+      label: string;
+    };
+
+type ImplementationStateCredit =
+  | {
+      type: "merged";
+      creditRatio: 1;
+      label: string;
+    }
+  | {
+      type: "open";
       creditRatio: 0.5;
+      label: string;
+    }
+  | {
+      type: "closed";
+      creditRatio: 0.25;
       label: string;
     };
 
@@ -115,6 +132,44 @@ export function calculateImportance(input: ImportanceInput): number {
   );
 }
 
+/** 選択期間の末日時点における PR の状態を求める。 */
+export function resolvePullOutcomeAtRangeEnd(
+  outcome: PullOutcome,
+  rangeEnd: string,
+): PullOutcome {
+  switch (outcome.kind) {
+    case "merged":
+      return outcome.mergedAt.slice(0, 10) <= rangeEnd
+        ? outcome
+        : { kind: "open" };
+    case "closed":
+      return outcome.closedAt.slice(0, 10) <= rangeEnd
+        ? outcome
+        : { kind: "open" };
+    case "open":
+      return outcome;
+    default:
+      throw new UnreachableError(outcome);
+  }
+}
+
+/** PR の状態に応じた配点対象日を求める。 */
+export function getPullScoringDate(
+  createdAt: string,
+  outcome: PullOutcome,
+): string {
+  switch (outcome.kind) {
+    case "merged":
+      return outcome.mergedAt;
+    case "closed":
+      return outcome.closedAt;
+    case "open":
+      return createdAt;
+    default:
+      throw new UnreachableError(outcome);
+  }
+}
+
 /** PR の実装体制と実装枠の配分率を決める。 */
 export function calculateFullAiImplementationCredit(
   pull: PreparedPull,
@@ -133,9 +188,38 @@ export function calculateFullAiImplementationCredit(
   };
 }
 
+/** PR の状態に応じた実装枠の配分率を決める。 */
+export function calculateImplementationStateCredit(
+  outcome: PullOutcome,
+): ImplementationStateCredit {
+  switch (outcome.kind) {
+    case "merged":
+      return {
+        type: "merged",
+        creditRatio: 1,
+        label: "マージ済み",
+      };
+    case "open":
+      return {
+        type: "open",
+        creditRatio: 0.5,
+        label: "オープン",
+      };
+    case "closed":
+      return {
+        type: "closed",
+        creditRatio: 0.25,
+        label: "クローズ済み",
+      };
+    default:
+      throw new UnreachableError(outcome);
+  }
+}
+
 /** PR の独立したレビュー保証と実装枠の配分率を決める。 */
 export function calculateImplementationReviewAssurance(
-  pull: PreparedMergedPull,
+  pull: PreparedPull,
+  rangeEnd: string,
 ): ImplementationReviewAssurance {
   const outcome = pull.outcome;
   const authorLogin = pull.author.login.toLowerCase();
@@ -143,7 +227,7 @@ export function calculateImplementationReviewAssurance(
     login.toLowerCase() !== authorLogin;
   const independentReviews = pull.reviews.filter(
     (review) =>
-      isTimestampAtOrBefore(review.submittedAt, outcome.mergedAt) &&
+      isTimestampWithinPullOutcome(review.submittedAt, outcome, rangeEnd) &&
       isIndependent(review.actor.login),
   );
   const hasApproval = independentReviews.some(
@@ -153,11 +237,13 @@ export function calculateImplementationReviewAssurance(
     independentReviews.some((review) => review.hasSubstantiveSummary) ||
     pull.reviewThreads.some(
       (thread) =>
-        isTimestampAtOrBefore(thread.createdAt, outcome.mergedAt) &&
+        isTimestampWithinPullOutcome(thread.createdAt, outcome, rangeEnd) &&
         isIndependent(thread.actor.login),
     );
   const hasIndependentMerger =
-    outcome.mergedByIsHuman && isIndependent(outcome.mergedBy.login);
+    outcome.kind === "merged" &&
+    outcome.mergedByIsHuman &&
+    isIndependent(outcome.mergedBy.login);
 
   if (hasApproval) {
     return {
@@ -182,9 +268,29 @@ export function calculateImplementationReviewAssurance(
   }
   return {
     type: "unreviewed",
-    creditRatio: 0.5,
+    creditRatio: outcome.kind === "merged" ? 0.5 : 0,
     label: "独立した品質確認なし",
   };
+}
+
+function isTimestampWithinPullOutcome(
+  timestamp: string,
+  outcome: PullOutcome,
+  rangeEnd: string,
+): boolean {
+  switch (outcome.kind) {
+    case "merged":
+      return isTimestampAtOrBefore(timestamp, outcome.mergedAt);
+    case "closed":
+      return isTimestampAtOrBefore(timestamp, outcome.closedAt);
+    case "open":
+      return isTimestampAtOrBefore(
+        timestamp,
+        rangeEnd + "T23:59:59.999Z",
+      );
+    default:
+      throw new UnreachableError(outcome);
+  }
 }
 
 function isTimestampAtOrBefore(timestamp: string, end: string): boolean {

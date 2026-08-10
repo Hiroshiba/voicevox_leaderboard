@@ -3,6 +3,7 @@ import type {
   Actor,
   LeaderboardDataset,
   PreparedMergedPull,
+  PreparedPull,
 } from "../src/domain/model";
 import { calculateLeaderboard } from "../src/services/calculateLeaderboard";
 
@@ -97,28 +98,271 @@ describe("calculateLeaderboard", () => {
     ]);
   });
 
-  it("未マージ PR を計算へ含めない", () => {
+  it("未マージ PR を同じ関連 Issue のマージ済み PR と分ける", () => {
+    const openPull: PreparedPull = {
+      ...pull(3, "2026-07-15T00:00:00Z"),
+      outcome: { kind: "open" },
+    };
     const unmergedDataset: LeaderboardDataset = {
       ...dataset,
-      pulls: [
-        ...dataset.pulls,
-        {
-          ...pull(3, "2026-07-15T00:00:00Z"),
-          outcome: { kind: "open" },
-        },
-        {
-          ...pull(4, "2026-07-16T00:00:00Z"),
-          outcome: {
-            kind: "closed",
-            closedAt: "2026-07-16T00:00:00Z",
-          },
-        },
-      ],
+      pulls: [pull(1, "2026-07-10T00:00:00Z"), openPull],
     };
 
-    expect(calculateLeaderboard(unmergedDataset, dataset.range)).toEqual(
-      calculateLeaderboard(dataset, dataset.range),
+    const result = calculateLeaderboard(unmergedDataset, dataset.range);
+    const mergedWorkstream = findPullWorkstream(result, 1);
+    const openWorkstream = findPullWorkstream(result, 3);
+
+    expect(result.workstreams).toHaveLength(2);
+    expect(mergedWorkstream.key).toBe("voicevox/voicevox#10");
+    expect(openWorkstream.key).toBe("pr:voicevox/voicevox#3");
+    expect(mergedWorkstream.pulls).toHaveLength(1);
+    expect(openWorkstream.pulls).toHaveLength(1);
+    expect(mergedWorkstream.effectiveLines).toBe(20);
+  });
+
+  it("同じ関連 Issue の未マージ PR を一件ずつ分ける", () => {
+    const firstOpenPull: PreparedPull = {
+      ...pull(3, "2026-07-15T00:00:00Z"),
+      outcome: { kind: "open" },
+    };
+    const secondOpenPull: PreparedPull = {
+      ...pull(4, "2026-07-16T00:00:00Z"),
+      outcome: { kind: "open" },
+    };
+    const unmergedDataset: LeaderboardDataset = {
+      ...dataset,
+      pulls: [firstOpenPull, secondOpenPull],
+    };
+
+    const result = calculateLeaderboard(unmergedDataset, dataset.range);
+
+    expect(result.workstreams).toHaveLength(2);
+    expect(result.workstreams.map((workstream) => workstream.key)).toEqual([
+      "pr:voicevox/voicevox#3",
+      "pr:voicevox/voicevox#4",
+    ]);
+    expect(
+      result.workstreams.every((workstream) => workstream.pulls.length === 1),
+    ).toBe(true);
+  });
+
+  it("レビュー保証があるオープン PR の実装枠をマージ済みの半分にする", () => {
+    const mergedPull: PreparedMergedPull = {
+      ...pull(11, "2026-07-15T00:00:00Z"),
+      issueKey: undefined,
+    };
+    const openPull: PreparedPull = {
+      ...mergedPull,
+      outcome: { kind: "open" },
+    };
+
+    const mergedWorkstream = calculateSinglePullWorkstream(mergedPull);
+    const openWorkstream = calculateSinglePullWorkstream(openPull);
+
+    expect(openWorkstream.implementationPoints).toBeCloseTo(
+      mergedWorkstream.implementationPoints * 0.5,
+      12,
     );
+  });
+
+  it("レビュー保証があるクローズ済み未マージ PR の実装枠をマージ済みの四分の一にする", () => {
+    const mergedPull: PreparedMergedPull = {
+      ...pull(12, "2026-07-15T00:00:00Z"),
+      issueKey: undefined,
+    };
+    const closedPull: PreparedPull = {
+      ...mergedPull,
+      outcome: {
+        kind: "closed",
+        closedAt: "2026-07-15T00:00:00Z",
+      },
+    };
+
+    const mergedWorkstream = calculateSinglePullWorkstream(mergedPull);
+    const closedWorkstream = calculateSinglePullWorkstream(closedPull);
+
+    expect(closedWorkstream.implementationPoints).toBeCloseTo(
+      mergedWorkstream.implementationPoints * 0.25,
+      12,
+    );
+  });
+
+  it("レビュー保証がない未マージ PR の実装枠を配分しない", () => {
+    const openPull: PreparedPull = {
+      ...pull(13, "2026-07-15T00:00:00Z"),
+      outcome: { kind: "open" },
+      reviews: [],
+      reviewThreads: [],
+      issueKey: undefined,
+    };
+
+    const workstream = calculateSinglePullWorkstream(openPull);
+    const assuranceLoss = workstream.unallocatedEntries.find(
+      (entry) =>
+        entry.id ===
+        openPull.key + ":implementation:review-assurance:unallocated",
+    );
+
+    expect(workstream.implementationPoints).toBe(0);
+    expect(assuranceLoss?.points).toBeCloseTo(
+      workstream.importance * 0.65,
+      12,
+    );
+  });
+
+  it("未マージ PR のレビュー枠へ状態係数を掛けない", () => {
+    const mergedPull: PreparedMergedPull = {
+      ...pull(14, "2026-07-15T00:00:00Z"),
+      issueKey: undefined,
+    };
+    const openPull: PreparedPull = {
+      ...mergedPull,
+      outcome: { kind: "open" },
+    };
+
+    const mergedWorkstream = calculateSinglePullWorkstream(mergedPull);
+    const openWorkstream = calculateSinglePullWorkstream(openPull);
+
+    expect(openWorkstream.reviewPoints).toBeCloseTo(
+      mergedWorkstream.reviewPoints,
+      12,
+    );
+  });
+
+  it("未マージ PR のワークストリームへ関連 Issue 枠を配分しない", () => {
+    const openPull: PreparedPull = {
+      ...pull(15, "2026-07-15T00:00:00Z"),
+      outcome: { kind: "open" },
+    };
+    const unmergedDataset: LeaderboardDataset = {
+      ...dataset,
+      pulls: [openPull],
+    };
+
+    const result = calculateLeaderboard(unmergedDataset, dataset.range);
+    const workstream = findPullWorkstream(result, openPull.number);
+    const issueLoss = workstream.unallocatedEntries.find(
+      (entry) => entry.kind === "issue",
+    );
+
+    expect(workstream.issuePoints).toBe(0);
+    expect(issueLoss?.points).toBeCloseTo(workstream.importance * 0.15, 12);
+    expect(issueLoss?.reason).toBe("未マージ PR のため関連 Issue 枠を未配分");
+  });
+
+  it("期間末より後にマージされた PR をオープンとして採点する", () => {
+    const mergedLater: PreparedMergedPull = {
+      ...pull(16, "2026-07-20T00:00:00Z"),
+      createdAt: "2026-07-05T00:00:00Z",
+      reviews: [
+        {
+          actor: bob,
+          submittedAt: "2026-07-10T00:00:00Z",
+          state: "APPROVED",
+          hasSubstantiveSummary: true,
+        },
+      ],
+      issueKey: undefined,
+    };
+    const laterDataset: LeaderboardDataset = {
+      ...dataset,
+      pulls: [mergedLater],
+      issues: [],
+    };
+
+    const result = calculateLeaderboard(laterDataset, {
+      start: "2026-07-01",
+      end: "2026-07-15",
+    });
+    const workstream = findPullWorkstream(result, mergedLater.number);
+
+    expect(workstream.key).toBe("pr:" + mergedLater.key);
+    expect(workstream.implementationPoints).toBeCloseTo(
+      workstream.importance * 0.65 * 0.5,
+      12,
+    );
+  });
+
+  it("期間末より後のレビューをオープン PR のレビュー保証に使わない", () => {
+    const mergedLater: PreparedMergedPull = {
+      ...pull(19, "2026-07-25T00:00:00Z"),
+      createdAt: "2026-07-05T00:00:00Z",
+      reviews: [
+        {
+          actor: bob,
+          submittedAt: "2026-07-16T00:00:00Z",
+          state: "APPROVED",
+          hasSubstantiveSummary: true,
+        },
+      ],
+      issueKey: undefined,
+    };
+    const laterDataset: LeaderboardDataset = {
+      ...dataset,
+      pulls: [mergedLater],
+      issues: [],
+    };
+
+    const result = calculateLeaderboard(laterDataset, {
+      start: "2026-07-01",
+      end: "2026-07-15",
+    });
+    const workstream = findPullWorkstream(result, mergedLater.number);
+
+    expect(workstream.implementationPoints).toBe(0);
+    expect(workstream.unallocatedEntries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id:
+            mergedLater.key +
+            ":implementation:review-assurance:unallocated",
+        }),
+      ]),
+    );
+  });
+
+  it("配点対象日が期間外でも期間内のレビューへレビュー枠を配分する", () => {
+    const openPull: PreparedPull = {
+      ...pull(17, "2026-07-10T00:00:00Z"),
+      createdAt: "2026-06-20T00:00:00Z",
+      outcome: { kind: "open" },
+      issueKey: undefined,
+    };
+    const reviewDataset: LeaderboardDataset = {
+      ...dataset,
+      pulls: [openPull],
+      issues: [],
+    };
+
+    const result = calculateLeaderboard(reviewDataset, dataset.range);
+    const workstream = findPullWorkstream(result, openPull.number);
+
+    expect(workstream.implementationPoints).toBe(0);
+    expect(workstream.reviewPoints).toBeGreaterThan(0);
+    expect(workstream.unallocatedEntries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: openPull.key + ":implementation:scoring-date:unallocated",
+        }),
+      ]),
+    );
+  });
+
+  it("未マージ PR の関連 Issue を独立 Issue として採点し続ける", () => {
+    const openPull: PreparedPull = {
+      ...pull(18, "2026-07-15T00:00:00Z"),
+      outcome: { kind: "open" },
+    };
+    const unmergedDataset: LeaderboardDataset = {
+      ...dataset,
+      pulls: [openPull],
+    };
+
+    const result = calculateLeaderboard(unmergedDataset, dataset.range);
+
+    expect(result.standaloneIssues.map((issue) => issue.key)).toEqual([
+      "voicevox/voicevox#10",
+    ]);
   });
 
   it("取得統計が異なっても計算結果を変えない", () => {
@@ -442,6 +686,31 @@ describe("calculateLeaderboard", () => {
     expect(reviewLoss?.points).toBeCloseTo(workstream.importance * 0.04, 12);
   });
 });
+
+function calculateSinglePullWorkstream(
+  targetPull: PreparedPull,
+): ReturnType<typeof calculateLeaderboard>["workstreams"][number] {
+  const singlePullDataset: LeaderboardDataset = {
+    ...dataset,
+    pulls: [targetPull],
+    issues: [],
+  };
+  const result = calculateLeaderboard(singlePullDataset, dataset.range);
+  return findPullWorkstream(result, targetPull.number);
+}
+
+function findPullWorkstream(
+  result: ReturnType<typeof calculateLeaderboard>,
+  pullNumber: number,
+): ReturnType<typeof calculateLeaderboard>["workstreams"][number] {
+  const workstream = result.workstreams.find((candidate) =>
+    candidate.pulls.some((targetPull) => targetPull.number === pullNumber),
+  );
+  if (workstream == null) {
+    throw new Error("検証対象の PR ワークストリームがありません。");
+  }
+  return workstream;
+}
 
 function pull(number: number, mergedAt: string): PreparedMergedPull {
   return {

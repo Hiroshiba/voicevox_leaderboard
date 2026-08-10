@@ -8,8 +8,8 @@ import type {
   LeaderboardDataset,
   LeaderboardResult,
   PreparedIssue,
-  PreparedMergedPull,
   PreparedPull,
+  PullOutcome,
   ScoreAllocation,
   ScoreEntry,
   SourceReference,
@@ -20,16 +20,25 @@ import type {
 import {
   calculateFullAiImplementationCredit,
   calculateImplementationReviewAssurance,
+  calculateImplementationStateCredit,
   calculateImportance,
   calculateStandaloneIssueScore,
+  getPullScoringDate,
+  resolvePullOutcomeAtRangeEnd,
   totalAllocations,
 } from "../domain/scoring.ts";
 import { parseDateRange } from "./calculationScope.ts";
 
+interface ScoringPull {
+  pull: PreparedPull;
+  outcome: PullOutcome;
+  scoringDate: string;
+}
+
 interface WorkstreamGroup {
   key: string;
   issue?: PreparedIssue;
-  pulls: PreparedMergedPull[];
+  pulls: ScoringPull[];
 }
 
 interface WeightedOrigin {
@@ -78,11 +87,7 @@ export function calculateLeaderboard(
   const issueByKey = new Map(
     dataset.issues.map((issue) => [issue.key, issue]),
   );
-  const pulls = dataset.pulls.filter(
-    (pull): pull is PreparedMergedPull =>
-      pull.outcome.kind === "merged" &&
-      isDateInRange(pull.outcome.mergedAt, range),
-  );
+  const pulls = selectPullsForScoring(dataset.pulls, range);
   const groups = groupWorkstreams(pulls, issueByKey);
   const workstreams = groups
     .map((group) => calculateWorkstream(group, range))
@@ -93,9 +98,11 @@ export function calculateLeaderboard(
     );
 
   const linkedIssueKeys = new Set(
-    groups
-      .map((group) => group.issue?.key)
-      .filter((key): key is string => key != null),
+    pulls.flatMap(({ pull, outcome }) =>
+      outcome.kind === "merged" && pull.issueKey != null
+        ? [pull.issueKey]
+        : [],
+    ),
   );
   const standaloneIssues = dataset.issues
     .map((issue) =>
@@ -118,21 +125,60 @@ export function calculateLeaderboard(
   };
 }
 
+function selectPullsForScoring(
+  pulls: PreparedPull[],
+  range: DateRange,
+): ScoringPull[] {
+  const selected: ScoringPull[] = [];
+  for (const pull of pulls) {
+    const outcome = resolvePullOutcomeAtRangeEnd(
+      pull.outcome,
+      range.end,
+    );
+    const scoringDate = getPullScoringDate(pull.createdAt, outcome);
+    const scoringDateInRange = isDateInRange(scoringDate, range);
+    if (outcome.kind === "merged") {
+      if (scoringDateInRange) {
+        selected.push({ pull, outcome, scoringDate });
+      }
+      continue;
+    }
+    if (scoringDateInRange || hasReviewActivityInRange(pull, range)) {
+      selected.push({ pull, outcome, scoringDate });
+    }
+  }
+  return selected;
+}
+
+function hasReviewActivityInRange(
+  pull: PreparedPull,
+  range: DateRange,
+): boolean {
+  return (
+    pull.reviews.some((review) => isDateInRange(review.submittedAt, range)) ||
+    pull.reviewThreads.some((thread) => isDateInRange(thread.createdAt, range))
+  );
+}
+
 function groupWorkstreams(
-  pulls: PreparedMergedPull[],
+  pulls: ScoringPull[],
   issueByKey: Map<string, PreparedIssue>,
 ): WorkstreamGroup[] {
   const groups = new Map<string, WorkstreamGroup>();
-  for (const pull of pulls) {
-    const key = pull.issueKey ?? "pr:" + pull.key;
+  for (const scoringPull of pulls) {
+    const pull = scoringPull.pull;
+    const key =
+      scoringPull.outcome.kind === "merged"
+        ? (pull.issueKey ?? "pr:" + pull.key)
+        : "pr:" + pull.key;
     const current = groups.get(key);
     if (current != null) {
-      current.pulls.push(pull);
+      current.pulls.push(scoringPull);
       continue;
     }
 
     if (pull.issueKey == null) {
-      groups.set(key, { key, pulls: [pull] });
+      groups.set(key, { key, pulls: [scoringPull] });
       continue;
     }
     const issue = issueByKey.get(pull.issueKey);
@@ -140,7 +186,7 @@ function groupWorkstreams(
       issue,
       pull.key + " の関連 Issue が事前取得データにありません。",
     );
-    groups.set(key, { key, issue, pulls: [pull] });
+    groups.set(key, { key, issue, pulls: [scoringPull] });
   }
   return [...groups.values()];
 }
@@ -150,16 +196,16 @@ function calculateWorkstream(
   range: DateRange,
 ): WorkstreamScore {
   const effectiveLines = sum(
-    group.pulls.map((pull) => pull.effectiveLines),
+    group.pulls.map(({ pull }) => pull.effectiveLines),
   );
   const nonGeneratedFiles = sum(
-    group.pulls.map((pull) => pull.nonGeneratedFiles),
+    group.pulls.map(({ pull }) => pull.nonGeneratedFiles),
   );
   const repositoryCount = new Set(
-    group.pulls.map((pull) => pull.repository.toLowerCase()),
+    group.pulls.map(({ pull }) => pull.repository.toLowerCase()),
   ).size;
   const conventionalBonus = Math.max(
-    ...group.pulls.map((pull) => pull.conventionalBonus),
+    ...group.pulls.map(({ pull }) => pull.conventionalBonus),
   );
   const importance = calculateImportance({
     effectiveLines,
@@ -167,12 +213,14 @@ function calculateWorkstream(
     repositoryCount,
     conventionalBonus,
   });
-  const firstPull = group.pulls[0];
-  assertNonNullable(firstPull, "ワークストリームに PR がありません。");
-  const title = group.issue?.title ?? firstPull.title;
-  const source = createSourceReference(group.issue, firstPull);
-  const sourceTitle = createSourceTitle(group.issue, firstPull);
-  const implementation = allocateImplementation(group, importance);
+  const firstScoringPull = group.pulls[0];
+  assertNonNullable(firstScoringPull, "ワークストリームに PR がありません。");
+  const merged = isMergedWorkstream(group);
+  const scoringIssue = merged ? group.issue : undefined;
+  const title = scoringIssue?.title ?? firstScoringPull.pull.title;
+  const source = createSourceReference(scoringIssue, firstScoringPull.pull);
+  const sourceTitle = createSourceTitle(scoringIssue, firstScoringPull.pull);
+  const implementation = allocateImplementation(group, importance, range);
   const review = allocateReviews(
     group,
     importance,
@@ -186,6 +234,7 @@ function calculateWorkstream(
     range,
     source,
     sourceTitle,
+    merged,
   );
   const allocations = [
     ...implementation.allocations,
@@ -209,7 +258,7 @@ function calculateWorkstream(
     title,
     source,
     ...(group.issue == null ? {} : { issue: toIssueReference(group.issue) }),
-    pulls: group.pulls,
+    pulls: group.pulls.map(({ pull }) => pull),
     effectiveLines,
     nonGeneratedFiles,
     repositoryCount,
@@ -232,30 +281,75 @@ function calculateWorkstream(
   };
 }
 
+function isMergedWorkstream(group: WorkstreamGroup): boolean {
+  const first = group.pulls[0];
+  assertNonNullable(first, "ワークストリームに PR がありません。");
+  const merged = first.outcome.kind === "merged";
+  if (
+    group.pulls.some(
+      ({ outcome }) => (outcome.kind === "merged") !== merged,
+    )
+  ) {
+    throw new Error("ワークストリームに異なる状態の PR が混在しています。");
+  }
+  if (merged === false && group.pulls.length !== 1) {
+    throw new Error("未マージ PR が同じワークストリームに混在しています。");
+  }
+  return merged;
+}
+
 function allocateImplementation(
   group: WorkstreamGroup,
   importance: number,
+  range: DateRange,
 ): AllocationResult {
-  const totalMass = sum(group.pulls.map((pull) => pull.mass));
+  const totalMass = sum(group.pulls.map(({ pull }) => pull.mass));
   if (totalMass <= 0) {
     throw new Error("ワークストリームの実装質量が正の値ではありません。");
   }
 
   const allocations: ScoreAllocation[] = [];
   const unallocatedEntries: UnallocatedScore[] = [];
-  for (const pull of group.pulls) {
+  for (const scoringPull of group.pulls) {
+    const { pull, outcome, scoringDate } = scoringPull;
     const pullPool = 0.65 * importance * (pull.mass / totalMass);
-    const fullAiCredit = calculateFullAiImplementationCredit(pull);
-    const reviewAssurance = calculateImplementationReviewAssurance(pull);
-    const fullAiPullPool = pullPool * fullAiCredit.creditRatio;
-    const distributablePullPool =
-      fullAiPullPool * reviewAssurance.creditRatio;
     const source = createPullSource(pull);
     const sourceTitle = createPullTitle(pull);
-    const creditLabel =
+    if (isDateInRange(scoringDate, range) === false) {
+      unallocatedEntries.push(
+        createUnallocatedScore(
+          pull.key + ":implementation:scoring-date:unallocated",
+          "implementation",
+          pullPool,
+          source,
+          sourceTitle,
+          "配点対象日 " + scoringDate + " が期間外のため実装枠を未配分",
+        ),
+      );
+      continue;
+    }
+
+    const fullAiCredit = calculateFullAiImplementationCredit(pull);
+    const reviewAssurance = calculateImplementationReviewAssurance(
+      {
+        ...pull,
+        outcome,
+      },
+      range.end,
+    );
+    const stateCredit = calculateImplementationStateCredit(outcome);
+    const fullAiPullPool = pullPool * fullAiCredit.creditRatio;
+    const reviewedPullPool =
+      fullAiPullPool * reviewAssurance.creditRatio;
+    const distributablePullPool = reviewedPullPool * stateCredit.creditRatio;
+    const assuranceLabel =
       fullAiCredit.type === "fullAi"
         ? fullAiCredit.label + "かつ" + reviewAssurance.label
         : reviewAssurance.label;
+    const creditLabel =
+      stateCredit.type === "merged"
+        ? assuranceLabel
+        : assuranceLabel + "かつ" + stateCredit.label;
     const reason =
       pull.repository +
       "#" +
@@ -266,7 +360,9 @@ function allocateImplementation(
       creditLabel +
       "として実装枠の" +
       formatPercent(
-        fullAiCredit.creditRatio * reviewAssurance.creditRatio,
+        fullAiCredit.creditRatio *
+          reviewAssurance.creditRatio *
+          stateCredit.creditRatio,
       ) +
       "%を配分";
     const fullAiUnallocatedPoints = pullPool - fullAiPullPool;
@@ -286,7 +382,7 @@ function allocateImplementation(
       );
     }
     const qualityUnallocatedPoints =
-      fullAiPullPool - distributablePullPool;
+      fullAiPullPool - reviewedPullPool;
     if (qualityUnallocatedPoints > 0) {
       unallocatedEntries.push(
         createUnallocatedScore(
@@ -303,6 +399,29 @@ function allocateImplementation(
             "%を未配分",
         ),
       );
+    }
+    const stateUnallocatedPoints = reviewedPullPool - distributablePullPool;
+    if (stateUnallocatedPoints > 0) {
+      unallocatedEntries.push(
+        createUnallocatedScore(
+          pull.key + ":implementation:state:unallocated",
+          "implementation",
+          stateUnallocatedPoints,
+          source,
+          sourceTitle,
+          stateCredit.label +
+            "のため実装枠の" +
+            formatPercent(
+              fullAiCredit.creditRatio *
+                reviewAssurance.creditRatio *
+                (1 - stateCredit.creditRatio),
+            ) +
+            "%を未配分",
+        ),
+      );
+    }
+    if (distributablePullPool === 0) {
+      continue;
     }
     const authorRatio = pull.coauthors.length > 0 ? 0.7 : 1;
     if (pull.authorIsHuman) {
@@ -360,7 +479,7 @@ function allocateReviews(
   sourceTitle: string,
 ): AllocationResult {
   const events = new Map<string, ReviewEvent[]>();
-  for (const pull of group.pulls) {
+  for (const { pull } of group.pulls) {
     const pullSource = createPullSource(pull);
     const pullTitle = createPullTitle(pull);
     for (const [reviewIndex, review] of pull.reviews.entries()) {
@@ -449,8 +568,24 @@ function allocateLinkedIssue(
   range: DateRange,
   source: SourceReference,
   sourceTitle: string,
+  merged: boolean,
 ): AllocationResult {
   const maximumPoints = 0.15 * importance;
+  if (merged === false) {
+    return {
+      allocations: [],
+      unallocatedEntries: [
+        createUnallocatedScore(
+          group.key + ":issue:unallocated",
+          "issue",
+          maximumPoints,
+          source,
+          sourceTitle,
+          "未マージ PR のため関連 Issue 枠を未配分",
+        ),
+      ],
+    };
+  }
   if (group.issue == null) {
     return {
       allocations: [],

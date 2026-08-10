@@ -290,6 +290,11 @@ interface PullBundle {
   commits: GithubPullCommit[];
 }
 
+interface PullFilesResult {
+  pull: GithubPull;
+  files: GithubPullFile[];
+}
+
 interface ResolvedIssue {
   key: string;
   repository: string;
@@ -306,6 +311,8 @@ interface RequestStats {
   cacheRevalidations: number;
   notModifiedResponses: number;
 }
+
+type CacheMode = "revalidate" | "refresh";
 
 class GitHubApiError extends Error {
   readonly status: number;
@@ -358,7 +365,8 @@ class Semaphore {
   }
 }
 
-class GitHubApiClient {
+/** GitHub API の取得とキャッシュを管理する。 */
+export class GitHubApiClient {
   private readonly token: string;
   private readonly cacheDirectory: string;
   private readonly semaphore = new Semaphore(coreConcurrency);
@@ -383,17 +391,36 @@ class GitHubApiClient {
     schema: z.ZodType<T>,
     resource: "core" | "search",
   ): Promise<T> {
+    return this.requestWithCacheMode(path, schema, resource, "revalidate");
+  }
+
+  /** REST API の応答を条件付きリクエストなしで取得する。 */
+  async requestFresh<T>(
+    path: string,
+    schema: z.ZodType<T>,
+    resource: "core" | "search",
+  ): Promise<T> {
+    return this.requestWithCacheMode(path, schema, resource, "refresh");
+  }
+
+  private async requestWithCacheMode<T>(
+    path: string,
+    schema: z.ZodType<T>,
+    resource: "core" | "search",
+    cacheMode: CacheMode,
+  ): Promise<T> {
     const url = githubApiBaseUrl + path;
-    const current = this.inflight.get(url);
+    const inflightKey = cacheMode + "\n" + url;
+    const current = this.inflight.get(inflightKey);
     if (current != null) {
       return schema.parse(await current);
     }
-    const request = this.requestAndValidate(url, schema, resource);
-    this.inflight.set(url, request);
+    const request = this.requestAndValidate(url, schema, resource, cacheMode);
+    this.inflight.set(inflightKey, request);
     try {
       return schema.parse(await request);
     } finally {
-      this.inflight.delete(url);
+      this.inflight.delete(inflightKey);
     }
   }
 
@@ -403,13 +430,37 @@ class GitHubApiClient {
     itemSchema: z.ZodType<T>,
     maxPages: number,
   ): Promise<T[]> {
+    return this.paginateWithCacheMode(
+      path,
+      itemSchema,
+      maxPages,
+      "revalidate",
+    );
+  }
+
+  /** ページングされた REST API を条件付きリクエストなしで取得する。 */
+  async paginateFresh<T>(
+    path: string,
+    itemSchema: z.ZodType<T>,
+    maxPages: number,
+  ): Promise<T[]> {
+    return this.paginateWithCacheMode(path, itemSchema, maxPages, "refresh");
+  }
+
+  private async paginateWithCacheMode<T>(
+    path: string,
+    itemSchema: z.ZodType<T>,
+    maxPages: number,
+    cacheMode: CacheMode,
+  ): Promise<T[]> {
     const items: T[] = [];
     for (let page = 1; page <= maxPages; page += 1) {
       const separator = path.includes("?") ? "&" : "?";
-      const pageItems = await this.request(
+      const pageItems = await this.requestWithCacheMode(
         path + separator + "per_page=100&page=" + page,
         z.array(itemSchema),
         "core",
+        cacheMode,
       );
       items.push(...pageItems);
       if (pageItems.length < 100) {
@@ -486,8 +537,10 @@ class GitHubApiClient {
     url: string,
     schema: z.ZodType<T>,
     resource: "core" | "search",
+    cacheMode: CacheMode,
   ): Promise<T> {
-    const cache = await this.readCache(url);
+    const cache =
+      cacheMode === "revalidate" ? await this.readCache(url) : undefined;
     const headers = this.createHeaders(cache);
     if (headers.has("If-None-Match") || headers.has("If-Modified-Since")) {
       this.stats.cacheRevalidations += 1;
@@ -718,7 +771,8 @@ class GitHubApiClient {
   }
 }
 
-class DatasetBuilder {
+/** GitHub API の応答から採点用データセットを構築する。 */
+export class DatasetBuilder {
   private readonly client: GitHubApiClient;
   private readonly repositoryKeys: Set<string>;
   private readonly pullRequests = new Map<string, Promise<GithubPull>>();
@@ -752,16 +806,16 @@ class DatasetBuilder {
       );
     }
     const path = createRepositoryPath(target.repository) + "/pulls/" + target.number;
-    const [files, reviews, reviewComments, commits] = await Promise.all([
-      this.fetchPullFiles(target, path, pull.changed_files),
+    const [pullFiles, reviews, reviewComments, commits] = await Promise.all([
+      this.fetchPullFiles(target, path, pull),
       this.client.paginate(path + "/reviews", pullReviewSchema, 30),
       this.client.paginate(path + "/comments", reviewCommentSchema, 30),
       this.client.paginate(path + "/commits", pullCommitSchema, 30),
     ]);
     return {
       repository: target.repository,
-      pull,
-      files,
+      pull: pullFiles.pull,
+      files: pullFiles.files,
       reviews,
       reviewComments,
       commits,
@@ -823,8 +877,8 @@ class DatasetBuilder {
   private async fetchPullFiles(
     target: Target,
     path: string,
-    changedFiles: number,
-  ): Promise<GithubPullFile[]> {
+    pull: GithubPull,
+  ): Promise<PullFilesResult> {
     let files: GithubPullFile[];
     try {
       files = await this.client.paginate(path + "/files", pullFileSchema, 31);
@@ -836,19 +890,38 @@ class DatasetBuilder {
         createKey(target.repository, target.number) +
           " は REST API が差分を生成できないため GraphQL API から変更ファイルを取得します。",
       );
-      return this.client.requestPullFiles(
-        target.repository,
-        target.number,
-        31,
-      );
+      return {
+        pull,
+        files: await this.client.requestPullFiles(
+          target.repository,
+          target.number,
+          31,
+        ),
+      };
     }
-    if (files.length !== changedFiles) {
+    if (files.length === pull.changed_files) {
+      return { pull, files };
+    }
+
+    console.log(
+      createKey(target.repository, target.number) +
+        " の変更ファイル数が一致しないため、キャッシュを使わずに PR 詳細とファイル一覧を再取得します。",
+    );
+    const [refreshedPull, refreshedFiles] = await Promise.all([
+      this.refreshPull(target.repository, target.number),
+      this.client.paginateFresh(path + "/files", pullFileSchema, 31),
+    ]);
+    if (refreshedFiles.length !== refreshedPull.changed_files) {
       throw new Error(
         createKey(target.repository, target.number) +
-          " の変更ファイル数が GitHub API の集計値と一致しません。",
+          " の変更ファイル数が GitHub API の集計値と一致しません。集計値は " +
+          refreshedPull.changed_files +
+          " 件、ファイル一覧は " +
+          refreshedFiles.length +
+          " 件です。",
       );
     }
-    return files;
+    return { pull: refreshedPull, files: refreshedFiles };
   }
 
   private async getPull(repository: string, number: number): Promise<GithubPull> {
@@ -863,6 +936,19 @@ class DatasetBuilder {
       "core",
     );
     this.pullRequests.set(key, request);
+    return request;
+  }
+
+  private async refreshPull(
+    repository: string,
+    number: number,
+  ): Promise<GithubPull> {
+    const request = this.client.requestFresh(
+      createRepositoryPath(repository) + "/pulls/" + number,
+      pullSchema,
+      "core",
+    );
+    this.pullRequests.set(createKey(repository, number), request);
     return request;
   }
 

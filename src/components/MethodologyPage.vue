@@ -219,11 +219,11 @@ defineProps<{
         </dl>
       </section>
 
-      <section class="rounded-3xl bg-ink p-6 text-white sm:p-8">
+      <section class="rounded-3xl border border-line bg-surface p-6 sm:p-8">
         <h2 class="font-display text-2xl font-semibold">
           判定上の制約
         </h2>
-        <ul class="mt-5 space-y-2 text-sm leading-7 text-white/70">
+        <ul class="mt-5 space-y-2 text-sm leading-7 text-muted">
           <li
             v-for="notice in notices"
             :key="notice"

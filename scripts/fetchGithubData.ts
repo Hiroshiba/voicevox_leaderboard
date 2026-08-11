@@ -912,14 +912,18 @@ export class DatasetBuilder {
       this.client.paginateFresh(path + "/files", pullFileSchema, 31),
     ]);
     if (refreshedFiles.length !== refreshedPull.changed_files) {
-      throw new Error(
+      console.warn(
         createKey(target.repository, target.number) +
-          " の変更ファイル数が GitHub API の集計値と一致しません。集計値は " +
-          refreshedPull.changed_files +
-          " 件、ファイル一覧は " +
-          refreshedFiles.length +
-          " 件です。",
+          " は REST API の変更ファイル数が一致しないため GraphQL API から変更ファイルを取得します。",
       );
+      return {
+        pull: refreshedPull,
+        files: await this.client.requestPullFiles(
+          target.repository,
+          target.number,
+          31,
+        ),
+      };
     }
     return { pull: refreshedPull, files: refreshedFiles };
   }

@@ -37,7 +37,7 @@ afterEach(async () => {
 
 describe("DatasetBuilder.fetchPullBundle", () => {
   it("変更ファイル数の不一致時にキャッシュを使わず再取得する", async () => {
-    const scenario = await createFetchScenario(101);
+    const scenario = await createFetchScenario(101, 101);
     const log = vi
       .spyOn(globalThis.console, "log")
       .mockImplementation(() => undefined);
@@ -49,6 +49,7 @@ describe("DatasetBuilder.fetchPullBundle", () => {
 
     expect(bundle.pull.changed_files).toBe(101);
     expect(bundle.files).toHaveLength(101);
+    expect(scenario.graphqlRequestCount).toBe(0);
     expect(scenario.pullRequestHeaders).toHaveLength(2);
     expect(scenario.fileRequestHeaders).toHaveLength(4);
     expect(
@@ -72,8 +73,30 @@ describe("DatasetBuilder.fetchPullBundle", () => {
     );
   });
 
-  it("再取得しても変更ファイル数が一致しなければ例外を投げる", async () => {
-    const scenario = await createFetchScenario(102);
+  it("再取得しても変更ファイル数が一致しなければ GraphQL から取得する", async () => {
+    const scenario = await createFetchScenario(102, 101);
+    vi.spyOn(globalThis.console, "log").mockImplementation(() => undefined);
+    const warning = vi
+      .spyOn(globalThis.console, "warn")
+      .mockImplementation(() => undefined);
+
+    const bundle = await scenario.builder.fetchPullBundle({
+      repository: "voicevox/voicevox_vvm",
+      number: 56,
+    });
+
+    expect(bundle.pull.changed_files).toBe(102);
+    expect(bundle.files).toHaveLength(101);
+    expect(scenario.pullRequestHeaders).toHaveLength(2);
+    expect(scenario.fileRequestHeaders).toHaveLength(4);
+    expect(scenario.graphqlRequestCount).toBe(1);
+    expect(warning).toHaveBeenCalledWith(
+      "voicevox/voicevox_vvm#56 は REST API の変更ファイル数が一致しないため GraphQL API から変更ファイルを取得します。",
+    );
+  });
+
+  it("GraphQL の変更ファイル数が一致しなければ例外を投げる", async () => {
+    const scenario = await createFetchScenario(102, 100);
     vi.spyOn(globalThis.console, "log").mockImplementation(() => undefined);
 
     await expect(
@@ -82,10 +105,9 @@ describe("DatasetBuilder.fetchPullBundle", () => {
         number: 56,
       }),
     ).rejects.toThrow(
-      "voicevox/voicevox_vvm#56 の変更ファイル数が GitHub API の集計値と一致しません。集計値は 102 件、ファイル一覧は 101 件です。",
+      "voicevox/voicevox_vvm#56 の変更ファイル数が GitHub GraphQL API の集計値と一致しません。",
     );
-    expect(scenario.pullRequestHeaders).toHaveLength(2);
-    expect(scenario.fileRequestHeaders).toHaveLength(4);
+    expect(scenario.graphqlRequestCount).toBe(1);
   });
 });
 
@@ -191,13 +213,17 @@ function createBundle(
   };
 }
 
-async function createFetchScenario(refreshedChangedFiles: number) {
+async function createFetchScenario(
+  refreshedChangedFiles: number,
+  graphqlChangedFiles: number,
+) {
   const cacheDirectory = await mkdtemp(
     resolve(tmpdir(), "voicevox-leaderboard-test-"),
   );
   cacheDirectories.push(cacheDirectory);
   const pullRequestHeaders: Headers[] = [];
   const fileRequestHeaders: Headers[] = [];
+  let graphqlRequestCount = 0;
   const files = Array.from({ length: 101 }, (_, index) => ({
     filename: "file-" + index + ".txt",
     additions: 1,
@@ -239,6 +265,32 @@ async function createFetchScenario(refreshedChangedFiles: number) {
       ) {
         return createJsonResponse([], '"empty"');
       }
+      if (url.pathname === "/graphql") {
+        graphqlRequestCount += 1;
+        return createJsonResponse(
+          {
+            data: {
+              repository: {
+                pullRequest: {
+                  changedFiles: graphqlChangedFiles,
+                  files: {
+                    pageInfo: {
+                      hasNextPage: false,
+                      endCursor: null,
+                    },
+                    nodes: files.map((file) => ({
+                      path: file.filename,
+                      additions: file.additions,
+                      deletions: file.deletions,
+                    })),
+                  },
+                },
+              },
+            },
+          },
+          '"graphql"',
+        );
+      }
       throw new Error("想定外の GitHub API URL です。" + url.href);
     },
   );
@@ -253,7 +305,14 @@ async function createFetchScenario(refreshedChangedFiles: number) {
       mirror_url: null,
     },
   ]);
-  return { builder, pullRequestHeaders, fileRequestHeaders };
+  return {
+    builder,
+    pullRequestHeaders,
+    fileRequestHeaders,
+    get graphqlRequestCount() {
+      return graphqlRequestCount;
+    },
+  };
 }
 
 function createGithubPull(changedFiles: number) {

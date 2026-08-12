@@ -34,22 +34,24 @@ export interface SankeyDiagramNode {
 
 export interface SankeyDiagramLink {
   id: string;
-  sourceId: string;
-  targetId: string;
   kind: ContributionKind;
   points: number;
   path: string;
-  width: number;
-  label: string;
+}
+
+export interface SankeyDiagramLinkGroup {
+  id: string;
+  sourceId: string;
+  targetId: string;
+  links: SankeyDiagramLink[];
   selected: boolean;
-  href: string;
 }
 
 export interface SankeyDiagramLayout {
   width: number;
   height: number;
   nodes: SankeyDiagramNode[];
-  links: SankeyDiagramLink[];
+  linkGroups: SankeyDiagramLinkGroup[];
   originCount: number;
   allocationCount: number;
   highlightedPoints: number;
@@ -80,9 +82,7 @@ interface FlowLink {
   targetId: string;
   kind: ContributionKind;
   points: number;
-  label: string;
   selected: boolean;
-  href: string;
 }
 
 interface FlowGraph {
@@ -93,7 +93,6 @@ interface FlowGraph {
 
 interface FlowGraphBuilder {
   selection: SankeyDiagramSelection;
-  rangeSelection: RangeSelection;
   nodes: Map<string, FlowNode>;
   links: FlowLink[];
   linkIds: Set<string>;
@@ -127,7 +126,6 @@ const flowScale = 12;
 const minimumFlowWidth = 1;
 const minimumNodeHeight = 42;
 const nodeGap = 16;
-const parallelFlowGap = 1;
 
 /** 選択対象に関係する配点を PR、Issue、人物の経路として配置する。 */
 export function createSankeyDiagramLayout(
@@ -135,7 +133,7 @@ export function createSankeyDiagramLayout(
   selection: SankeyDiagramSelection,
   rangeSelection: RangeSelection,
 ): SankeyDiagramLayout {
-  const graph = collectFlowGraph(result, selection, rangeSelection);
+  const graph = collectFlowGraph(result, selection);
   if (graph.links.length === 0) {
     throw new Error("選択対象に関係する配点経路がありません。");
   }
@@ -167,7 +165,7 @@ export function createSankeyDiagramLayout(
       Math.max(...nodeLayouts.map((layout) => layout.y + layout.height)) +
       diagramPadding,
     nodes: createDiagramNodes(rangeSelection, nodeLayouts),
-    links: createDiagramLinks(graph.links, nodeLayouts),
+    linkGroups: createDiagramLinkGroups(graph.links, nodeLayouts),
     originCount: graph.nodes.filter((node) => targetIds.has(node.id) === false)
       .length,
     allocationCount: graph.allocationCount,
@@ -181,11 +179,9 @@ export function createSankeyDiagramLayout(
 function collectFlowGraph(
   result: LeaderboardResult,
   selection: SankeyDiagramSelection,
-  rangeSelection: RangeSelection,
 ): FlowGraph {
   const builder: FlowGraphBuilder = {
     selection,
-    rangeSelection,
     nodes: new Map<string, FlowNode>(),
     links: [],
     linkIds: new Set<string>(),
@@ -261,7 +257,7 @@ function collectFlowGraph(
 
   return {
     nodes: [...builder.nodes.values()],
-    links: builder.links,
+    links: aggregateFlowLinks(builder.links),
     allocationCount: builder.allocationCount,
   };
 }
@@ -362,7 +358,6 @@ function collectWorkstreamFlows(
         builder.selection,
         workstream,
         pull.key,
-        allocation,
       );
       addFlowLink(builder, {
         id:
@@ -376,16 +371,7 @@ function collectWorkstreamFlows(
         targetId: issueId,
         kind: "issue",
         points,
-        label:
-          compactReferenceLabel(pullReference) +
-          " から " +
-          compactReferenceLabel(issueReference) +
-          " の Issue 配点へ " +
-          formatScore(points) +
-          " 点。" +
-          allocation.reason,
         selected,
-        href: sourceHref(issueReference, builder.rangeSelection),
       });
     }
   }
@@ -405,16 +391,7 @@ function addAllocationLink(
     targetId: actorId,
     kind: allocation.kind,
     points: allocation.points,
-    label:
-      allocation.sourceTitle +
-      " から " +
-      allocation.actor.login +
-      " へ " +
-      formatScore(allocation.points) +
-      " 点。" +
-      allocation.reason,
     selected,
-    href: sourceHref(allocation.source, builder.rangeSelection),
   });
   builder.allocationCount += 1;
   if (builder.selection.type === "contributor" && selected) {
@@ -431,6 +408,38 @@ function addFlowLink(builder: FlowGraphBuilder, link: FlowLink): void {
   }
   builder.linkIds.add(link.id);
   builder.links.push(link);
+}
+
+function aggregateFlowLinks(links: FlowLink[]): FlowLink[] {
+  const aggregated = new Map<string, FlowLink>();
+  for (const link of links) {
+    const key = flowLinkKey(link);
+    const current = aggregated.get(key);
+    if (current == null) {
+      aggregated.set(key, {
+        ...link,
+        id: key,
+      });
+      continue;
+    }
+    if (current.selected !== link.selected) {
+      throw new Error(key + " の選択状態が一致しません。");
+    }
+    const points = current.points + link.points;
+    aggregated.set(key, {
+      ...current,
+      points,
+    });
+  }
+  return [...aggregated.values()];
+}
+
+function flowLinkKey(link: FlowLink): string {
+  return "flow:" + JSON.stringify([link.sourceId, link.targetId, link.kind]);
+}
+
+function flowEndpointKey(link: Pick<FlowLink, "sourceId" | "targetId">): string {
+  return "flow-group:" + JSON.stringify([link.sourceId, link.targetId]);
 }
 
 function addReferenceNode(
@@ -482,8 +491,8 @@ function addActorNode(
 }
 
 function layoutNodes(graph: FlowGraph): NodeLayout[] {
-  const incomingFlowHeights = sumFlowHeights(graph.links, "incoming");
-  const outgoingFlowHeights = sumFlowHeights(graph.links, "outgoing");
+  const incomingFlowHeights = sumLinkWidths(graph.links, "incoming");
+  const outgoingFlowHeights = sumLinkWidths(graph.links, "outgoing");
   const incomingPoints = sumLinkPoints(graph.links, "incoming");
   const outgoingPoints = sumLinkPoints(graph.links, "outgoing");
   const selectedPoints = sumSelectedLinkPoints(graph.links);
@@ -608,10 +617,10 @@ function createDiagramNodes(
   });
 }
 
-function createDiagramLinks(
+function createDiagramLinkGroups(
   flows: FlowLink[],
   nodeLayouts: NodeLayout[],
-): SankeyDiagramLink[] {
+): SankeyDiagramLinkGroup[] {
   const nodeById = new Map(
     nodeLayouts.map((layout) => [layout.flow.id, layout]),
   );
@@ -626,14 +635,10 @@ function createDiagramLinks(
       compareLinkedNodes(left.targetId, right.targetId, nodeById, left, right),
     );
     let offset = (node.height - node.outgoingFlowHeight) / 2;
-    for (const [index, flow] of outgoing.entries()) {
+    for (const flow of outgoing) {
       const width = scoreWidth(flow.points);
       sourceYByLink.set(flow.id, node.y + offset + width / 2);
       offset += width;
-      const nextFlow = outgoing[index + 1];
-      if (nextFlow != null && hasSameEndpoints(flow, nextFlow)) {
-        offset += parallelFlowGap;
-      }
     }
 
     const incoming = incomingByNode.get(node.flow.id) ?? [];
@@ -641,44 +646,76 @@ function createDiagramLinks(
       compareLinkedNodes(left.sourceId, right.sourceId, nodeById, left, right),
     );
     offset = (node.height - node.incomingFlowHeight) / 2;
-    for (const [index, flow] of incoming.entries()) {
+    for (const flow of incoming) {
       const width = scoreWidth(flow.points);
       targetYByLink.set(flow.id, node.y + offset + width / 2);
       offset += width;
-      const nextFlow = incoming[index + 1];
-      if (nextFlow != null && hasSameEndpoints(flow, nextFlow)) {
-        offset += parallelFlowGap;
-      }
     }
   }
 
-  return flows
-    .map((flow): SankeyDiagramLink => {
-      const source = nodeById.get(flow.sourceId);
-      const target = nodeById.get(flow.targetId);
-      const sourceY = sourceYByLink.get(flow.id);
-      const targetY = targetYByLink.get(flow.id);
-      assertNonNullable(source, flow.sourceId + " の始点ノードがありません。");
-      assertNonNullable(target, flow.targetId + " の終点ノードがありません。");
-      assertNonNullable(sourceY, flow.id + " の始点位置がありません。");
-      assertNonNullable(targetY, flow.id + " の終点位置がありません。");
-      return {
-        ...flow,
-        path: createPath(
-          source.x + source.width,
-          sourceY,
-          target.x,
-          targetY,
-        ),
-        width: scoreWidth(flow.points),
-      };
-    })
-    .sort(
+  const groups = new Map<string, SankeyDiagramLinkGroup>();
+  for (const flow of flows) {
+    const source = nodeById.get(flow.sourceId);
+    const target = nodeById.get(flow.targetId);
+    const sourceY = sourceYByLink.get(flow.id);
+    const targetY = targetYByLink.get(flow.id);
+    assertNonNullable(source, flow.sourceId + " の始点ノードがありません。");
+    assertNonNullable(target, flow.targetId + " の終点ノードがありません。");
+    assertNonNullable(sourceY, flow.id + " の始点位置がありません。");
+    assertNonNullable(targetY, flow.id + " の終点位置がありません。");
+    const groupId = flowEndpointKey(flow);
+    const group = groups.get(groupId);
+    if (group == null) {
+      groups.set(groupId, {
+        id: groupId,
+        sourceId: flow.sourceId,
+        targetId: flow.targetId,
+        links: [
+          {
+            id: flow.id,
+            kind: flow.kind,
+            points: flow.points,
+            path: createRibbonPath(
+              source.x + source.width,
+              sourceY,
+              target.x,
+              targetY,
+              scoreWidth(flow.points),
+            ),
+          },
+        ],
+        selected: flow.selected,
+      });
+      continue;
+    }
+    if (group.selected !== flow.selected) {
+      throw new Error(groupId + " の選択状態が一致しません。");
+    }
+    group.links.push({
+      id: flow.id,
+      kind: flow.kind,
+      points: flow.points,
+      path: createRibbonPath(
+        source.x + source.width,
+        sourceY,
+        target.x,
+        targetY,
+        scoreWidth(flow.points),
+      ),
+    });
+  }
+  for (const group of groups.values()) {
+    group.links.sort(
       (left, right) =>
-        Number(left.selected) - Number(right.selected) ||
         contributionKindOrder(left.kind) - contributionKindOrder(right.kind) ||
         left.id.localeCompare(right.id),
     );
+  }
+  return [...groups.values()].sort(
+    (left, right) =>
+      Number(left.selected) - Number(right.selected) ||
+      left.id.localeCompare(right.id),
+  );
 }
 
 function compareLinkedNodes(
@@ -694,14 +731,15 @@ function compareLinkedNodes(
   assertNonNullable(rightNode, rightNodeId + " の接続先ノードがありません。");
   return (
     leftNode.y - rightNode.y ||
-    contributionKindOrder(leftLink.kind) -
-      contributionKindOrder(rightLink.kind) ||
+    compareContributionKinds(leftLink, rightLink) ||
     leftLink.id.localeCompare(rightLink.id)
   );
 }
 
-function hasSameEndpoints(left: FlowLink, right: FlowLink): boolean {
-  return left.sourceId === right.sourceId && left.targetId === right.targetId;
+function compareContributionKinds(left: FlowLink, right: FlowLink): number {
+  return (
+    contributionKindOrder(left.kind) - contributionKindOrder(right.kind)
+  );
 }
 
 function groupLinks(
@@ -721,33 +759,15 @@ function groupLinks(
   return grouped;
 }
 
-function sumFlowHeights(
+function sumLinkWidths(
   links: FlowLink[],
   direction: "incoming" | "outgoing",
 ): Map<string, number> {
-  const totals = sumLinks(
+  return sumLinks(
     links,
     direction,
     (link) => scoreWidth(link.points),
   );
-  for (const [nodeId, nodeLinks] of groupLinks(links, direction)) {
-    const parallelLinkCounts = new Map<string, number>();
-    for (const link of nodeLinks) {
-      const oppositeNodeId =
-        direction === "incoming" ? link.sourceId : link.targetId;
-      parallelLinkCounts.set(
-        oppositeNodeId,
-        (parallelLinkCounts.get(oppositeNodeId) ?? 0) + 1,
-      );
-    }
-    const gapCount = sum(
-      [...parallelLinkCounts.values()].map((count) => count - 1),
-    );
-    const total = totals.get(nodeId);
-    assertNonNullable(total, nodeId + " の配点帯の高さがありません。");
-    totals.set(nodeId, total + gapCount * parallelFlowGap);
-  }
-  return totals;
 }
 
 function sumLinkPoints(
@@ -896,14 +916,10 @@ function issueInputMatchesSelection(
   selection: SankeyDiagramSelection,
   workstream: WorkstreamScore,
   pullKey: string,
-  allocation: ScoreAllocation,
 ): boolean {
   switch (selection.type) {
     case "contributor":
-      return (
-        allocation.actor.login.toLowerCase() ===
-        selection.contributor.login.toLowerCase()
-      );
+      return selectionMatchesWorkstream(selection, workstream);
     case "pull":
       return pullKey.toLowerCase() === selection.key.toLowerCase();
     case "issue":
@@ -1030,30 +1046,49 @@ function scoreWidth(points: number): number {
   return Math.max(minimumFlowWidth, points * flowScale);
 }
 
-function createPath(
+function createRibbonPath(
   startX: number,
   startY: number,
   endX: number,
   endY: number,
+  width: number,
 ): string {
   const middleX = (startX + endX) / 2;
+  const halfWidth = width / 2;
   return (
     "M " +
     startX +
     " " +
-    startY +
+    (startY - halfWidth) +
     " C " +
     middleX +
     " " +
-    startY +
+    (startY - halfWidth) +
     ", " +
     middleX +
     " " +
-    endY +
+    (endY - halfWidth) +
     ", " +
     endX +
     " " +
-    endY
+    (endY - halfWidth) +
+    " L " +
+    endX +
+    " " +
+    (endY + halfWidth) +
+    " C " +
+    middleX +
+    " " +
+    (endY + halfWidth) +
+    ", " +
+    middleX +
+    " " +
+    (startY + halfWidth) +
+    ", " +
+    startX +
+    " " +
+    (startY + halfWidth) +
+    " Z"
   );
 }
 

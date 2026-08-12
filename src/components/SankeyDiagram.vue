@@ -92,8 +92,8 @@ function linkColor(link: SankeyDiagramLink): string {
   }
 }
 
-function linkOpacity(link: SankeyDiagramLink): number {
-  if (link.selected) {
+function linkOpacity(selected: boolean): number {
+  if (selected) {
     return 0.7;
   }
   return 0.32;
@@ -165,26 +165,21 @@ function formatScore(score: number): string {
         role="img"
         :aria-label="selectionLabel + ' に関係する PR と Issue から人物への配点経路を示すサンキーダイアグラム'"
       >
-        <g
-          fill="none"
-          stroke-linecap="butt"
-        >
+        <g>
           <template
-            v-for="link in layout.links"
-            :key="link.id"
+            v-for="group in layout.linkGroups"
+            :key="group.id"
           >
-            <a
-              :href="link.href"
+            <g
+              :opacity="linkOpacity(group.selected)"
             >
               <path
+                v-for="link in group.links"
+                :key="link.id"
                 :d="link.path"
-                :stroke="linkColor(link)"
-                :stroke-width="link.width"
-                :opacity="linkOpacity(link)"
-              >
-                <title>{{ link.label }}</title>
-              </path>
-            </a>
+                :fill="linkColor(link)"
+              />
+            </g>
           </template>
         </g>
 

@@ -2,6 +2,7 @@
 
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
+import { assertNonNullable } from "../src/domain/errors";
 import type {
   Actor,
   ContributorScore,
@@ -191,6 +192,49 @@ const rangeSelection = {
   range: result.range,
 } satisfies RangeSelection;
 
+const aliceReview = allocation(
+  "pull:alice-review",
+  alice,
+  "review",
+  2,
+  "pull",
+  "voicevox/voicevox#1",
+  "実質的なレビュースレッド",
+);
+
+const parallelWorkstream: WorkstreamScore = {
+  ...workstream,
+  importance: 5,
+  implementationPoints: 3,
+  reviewPoints: 2,
+  issuePoints: 0,
+  allocations: [aliceImplementation, aliceReview],
+  unallocatedPoints: 0,
+  unallocatedEntries: [],
+};
+
+const parallelContributor: ContributorScore = {
+  ...alice,
+  rank: 1,
+  score: 5,
+  implementationPoints: 3,
+  reviewPoints: 2,
+  issuePoints: 0,
+  entries: [toEntry(aliceImplementation), toEntry(aliceReview)],
+};
+
+const parallelResult: LeaderboardResult = {
+  ...result,
+  contributors: [parallelContributor],
+  workstreams: [parallelWorkstream],
+  standaloneIssues: [],
+};
+
+const parallelContributorSelection = {
+  type: "contributor",
+  contributor: parallelContributor,
+} satisfies SankeyDiagramSelection;
+
 describe("createSankeyDiagramLayout", () => {
   it("同じ PR、Issue、人物を一つのノードへまとめる", () => {
     const layout = createSankeyDiagramLayout(
@@ -296,6 +340,72 @@ describe("createSankeyDiagramLayout", () => {
     expect(
       layout.links.every((link) => link.href.startsWith("/")),
     ).toBe(true);
+  });
+
+  it("同じ始点と終点の帯に隙間を設ける", () => {
+    const layout = createSankeyDiagramLayout(
+      parallelResult,
+      parallelContributorSelection,
+      rangeSelection,
+    );
+    const parallelLinks = layout.links.filter(
+      (link) =>
+        link.sourceId === "pull:voicevox/voicevox#1" &&
+        link.targetId === "actor:alice",
+    );
+
+    expect(parallelLinks).toHaveLength(2);
+    expect(new Set(parallelLinks.map((link) => link.kind))).toEqual(
+      new Set(["implementation", "review"]),
+    );
+    const paths = parallelLinks.map((link) => ({
+      link,
+      path: parseCubicPath(link.path),
+    }));
+    for (const t of [0, 0.25, 0.5, 0.75, 1]) {
+      const centers = paths.map(({ path }) => evaluateCubic(path, t));
+      const firstCenter = centers[0];
+      const secondCenter = centers[1];
+      assertNonNullable(firstCenter, "平行経路の一つ目の中心位置がありません。");
+      assertNonNullable(secondCenter, "平行経路の二つ目の中心位置がありません。");
+      const centerDistance = Math.abs(firstCenter - secondCenter);
+      const halfWidthTotal = paths.reduce(
+        (distance, { link }) => distance + link.width / 2,
+        0,
+      );
+
+      expect(centerDistance).toBeCloseTo(halfWidthTotal + 1, 10);
+    }
+  });
+
+  it("片側のノードだけが同じ帯には隙間を設けない", () => {
+    const layout = createSankeyDiagramLayout(
+      result,
+      contributorSelection,
+      rangeSelection,
+    );
+    const pullLinks = layout.links
+      .filter((link) => link.sourceId === "pull:voicevox/voicevox#1")
+      .map((link) => ({ link, path: parseCubicPath(link.path) }))
+      .sort((left, right) => left.path.startY - right.path.startY);
+    const adjacent = pullLinks.find(
+      (current, index) => {
+        const next = pullLinks[index + 1];
+        return next != null && current.link.targetId !== next.link.targetId;
+      },
+    );
+    const adjacentIndex = adjacent == null ? -1 : pullLinks.indexOf(adjacent);
+    const next = adjacentIndex < 0 ? undefined : pullLinks[adjacentIndex + 1];
+
+    expect(adjacent).toBeDefined();
+    expect(next).toBeDefined();
+    if (adjacent == null || next == null) {
+      throw new Error("異なる終点の隣接リンクがありません。");
+    }
+    expect(next.path.startY - adjacent.path.startY).toBeCloseTo(
+      (adjacent.link.width + next.link.width) / 2,
+      10,
+    );
   });
 
   it("直近期間指定をノードとリンクへ引き継ぐ", () => {
@@ -459,6 +569,45 @@ describe("createSankeyDiagramLayout", () => {
     expect(issueKeys.size).toBeGreaterThan(0);
   });
 });
+
+interface CubicPath {
+  startY: number;
+  firstControlY: number;
+  secondControlY: number;
+  endY: number;
+}
+
+function parseCubicPath(path: string): CubicPath {
+  const values = path
+    .match(/-?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?/gi)
+    ?.map(Number);
+  if (values == null || values.length !== 8) {
+    throw new Error("サンキー経路の曲線を解釈できません。");
+  }
+  const startY = values[1];
+  const firstControlY = values[3];
+  const secondControlY = values[5];
+  const endY = values[7];
+  if (
+    startY == null ||
+    firstControlY == null ||
+    secondControlY == null ||
+    endY == null
+  ) {
+    throw new Error("サンキー経路の曲線位置がありません。");
+  }
+  return { startY, firstControlY, secondControlY, endY };
+}
+
+function evaluateCubic(path: CubicPath, t: number): number {
+  const inverse = 1 - t;
+  return (
+    inverse ** 3 * path.startY +
+    3 * inverse ** 2 * t * path.firstControlY +
+    3 * inverse * t ** 2 * path.secondControlY +
+    t ** 3 * path.endY
+  );
+}
 
 function actor(login: string): Actor {
   return {

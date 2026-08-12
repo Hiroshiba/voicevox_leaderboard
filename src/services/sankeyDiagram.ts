@@ -127,6 +127,7 @@ const flowScale = 12;
 const minimumFlowWidth = 1;
 const minimumNodeHeight = 42;
 const nodeGap = 16;
+const parallelFlowGap = 1;
 
 /** 選択対象に関係する配点を PR、Issue、人物の経路として配置する。 */
 export function createSankeyDiagramLayout(
@@ -481,14 +482,14 @@ function addActorNode(
 }
 
 function layoutNodes(graph: FlowGraph): NodeLayout[] {
-  const incomingWidths = sumLinkWidths(graph.links, "incoming");
-  const outgoingWidths = sumLinkWidths(graph.links, "outgoing");
+  const incomingFlowHeights = sumFlowHeights(graph.links, "incoming");
+  const outgoingFlowHeights = sumFlowHeights(graph.links, "outgoing");
   const incomingPoints = sumLinkPoints(graph.links, "incoming");
   const outgoingPoints = sumLinkPoints(graph.links, "outgoing");
   const selectedPoints = sumSelectedLinkPoints(graph.links);
   const layouts = graph.nodes.map((flow): NodeLayout => {
-    const incomingFlowHeight = incomingWidths.get(flow.id) ?? 0;
-    const outgoingFlowHeight = outgoingWidths.get(flow.id) ?? 0;
+    const incomingFlowHeight = incomingFlowHeights.get(flow.id) ?? 0;
+    const outgoingFlowHeight = outgoingFlowHeights.get(flow.id) ?? 0;
     const incoming = incomingPoints.get(flow.id) ?? 0;
     const outgoing = outgoingPoints.get(flow.id) ?? 0;
     if (incoming > 0 && outgoing > 0) {
@@ -625,10 +626,14 @@ function createDiagramLinks(
       compareLinkedNodes(left.targetId, right.targetId, nodeById, left, right),
     );
     let offset = (node.height - node.outgoingFlowHeight) / 2;
-    for (const flow of outgoing) {
+    for (const [index, flow] of outgoing.entries()) {
       const width = scoreWidth(flow.points);
       sourceYByLink.set(flow.id, node.y + offset + width / 2);
       offset += width;
+      const nextFlow = outgoing[index + 1];
+      if (nextFlow != null && hasSameEndpoints(flow, nextFlow)) {
+        offset += parallelFlowGap;
+      }
     }
 
     const incoming = incomingByNode.get(node.flow.id) ?? [];
@@ -636,10 +641,14 @@ function createDiagramLinks(
       compareLinkedNodes(left.sourceId, right.sourceId, nodeById, left, right),
     );
     offset = (node.height - node.incomingFlowHeight) / 2;
-    for (const flow of incoming) {
+    for (const [index, flow] of incoming.entries()) {
       const width = scoreWidth(flow.points);
       targetYByLink.set(flow.id, node.y + offset + width / 2);
       offset += width;
+      const nextFlow = incoming[index + 1];
+      if (nextFlow != null && hasSameEndpoints(flow, nextFlow)) {
+        offset += parallelFlowGap;
+      }
     }
   }
 
@@ -691,6 +700,10 @@ function compareLinkedNodes(
   );
 }
 
+function hasSameEndpoints(left: FlowLink, right: FlowLink): boolean {
+  return left.sourceId === right.sourceId && left.targetId === right.targetId;
+}
+
 function groupLinks(
   links: FlowLink[],
   direction: "incoming" | "outgoing",
@@ -708,15 +721,33 @@ function groupLinks(
   return grouped;
 }
 
-function sumLinkWidths(
+function sumFlowHeights(
   links: FlowLink[],
   direction: "incoming" | "outgoing",
 ): Map<string, number> {
-  return sumLinks(
+  const totals = sumLinks(
     links,
     direction,
     (link) => scoreWidth(link.points),
   );
+  for (const [nodeId, nodeLinks] of groupLinks(links, direction)) {
+    const parallelLinkCounts = new Map<string, number>();
+    for (const link of nodeLinks) {
+      const oppositeNodeId =
+        direction === "incoming" ? link.sourceId : link.targetId;
+      parallelLinkCounts.set(
+        oppositeNodeId,
+        (parallelLinkCounts.get(oppositeNodeId) ?? 0) + 1,
+      );
+    }
+    const gapCount = sum(
+      [...parallelLinkCounts.values()].map((count) => count - 1),
+    );
+    const total = totals.get(nodeId);
+    assertNonNullable(total, nodeId + " の配点帯の高さがありません。");
+    totals.set(nodeId, total + gapCount * parallelFlowGap);
+  }
+  return totals;
 }
 
 function sumLinkPoints(

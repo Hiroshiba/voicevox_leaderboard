@@ -202,6 +202,16 @@ const aliceReview = allocation(
   "実質的なレビュースレッド",
 );
 
+const aliceSecondReview = allocation(
+  "pull:alice-second-review",
+  alice,
+  "review",
+  1,
+  "pull",
+  "voicevox/voicevox#1",
+  "実質的なレビュースレッド 2 件目",
+);
+
 const parallelWorkstream: WorkstreamScore = {
   ...workstream,
   importance: 5,
@@ -233,6 +243,35 @@ const parallelResult: LeaderboardResult = {
 const parallelContributorSelection = {
   type: "contributor",
   contributor: parallelContributor,
+} satisfies SankeyDiagramSelection;
+
+const duplicateWorkstream: WorkstreamScore = {
+  ...parallelWorkstream,
+  importance: 6,
+  reviewPoints: 3,
+  allocations: [aliceImplementation, aliceReview, aliceSecondReview],
+};
+
+const duplicateContributor: ContributorScore = {
+  ...parallelContributor,
+  score: 6,
+  reviewPoints: 3,
+  entries: [
+    toEntry(aliceImplementation),
+    toEntry(aliceReview),
+    toEntry(aliceSecondReview),
+  ],
+};
+
+const duplicateResult: LeaderboardResult = {
+  ...parallelResult,
+  contributors: [duplicateContributor],
+  workstreams: [duplicateWorkstream],
+};
+
+const duplicateContributorSelection = {
+  type: "contributor",
+  contributor: duplicateContributor,
 } satisfies SankeyDiagramSelection;
 
 describe("createSankeyDiagramLayout", () => {
@@ -276,7 +315,7 @@ describe("createSankeyDiagramLayout", () => {
       ...layout.links.map((link) => link.id),
     ];
 
-    expect(layout.links).toHaveLength(7);
+    expect(layout.links).toHaveLength(6);
     expect(ids.some((id) => id.includes("review-loss"))).toBe(false);
     expect(ids.some((id) => id.includes("issue-loss"))).toBe(false);
     expect("unallocatedPoints" in layout).toBe(false);
@@ -308,7 +347,7 @@ describe("createSankeyDiagramLayout", () => {
     const actorNode = layout.nodes.find((node) => node.id === "actor:alice");
 
     expect(directLink?.points).toBe(3);
-    expect(issueInputLinks).toHaveLength(2);
+    expect(issueInputLinks).toHaveLength(1);
     expect(issueInputLinks.every((link) => link.kind === "issue")).toBe(true);
     expect(issueInputLinks.reduce((total, link) => total + link.points, 0)).toBe(
       2,
@@ -342,7 +381,30 @@ describe("createSankeyDiagramLayout", () => {
     ).toBe(true);
   });
 
-  it("同じ始点と終点の帯に隙間を設ける", () => {
+  it("同じ始点と終点と種別の配点を一本に集約する", () => {
+    const layout = createSankeyDiagramLayout(
+      duplicateResult,
+      duplicateContributorSelection,
+      rangeSelection,
+    );
+    const parallelLinks = layout.links.filter(
+      (link) =>
+        link.sourceId === "pull:voicevox/voicevox#1" &&
+        link.targetId === "actor:alice",
+    );
+    const reviewLink = parallelLinks.find((link) => link.kind === "review");
+
+    expect(parallelLinks).toHaveLength(2);
+    expect(reviewLink?.points).toBe(3);
+    expect(reviewLink?.id).toBe(
+      'flow:["pull:voicevox/voicevox#1","actor:alice","review"]',
+    );
+    expect(layout.allocationCount).toBe(3);
+    expect(layout.highlightedPoints).toBe(6);
+    expect(layout.totalAllocatedPoints).toBe(6);
+  });
+
+  it("同じ始点と終点でも配点種別ごとの帯は隣接させる", () => {
     const layout = createSankeyDiagramLayout(
       parallelResult,
       parallelContributorSelection,
@@ -374,11 +436,11 @@ describe("createSankeyDiagramLayout", () => {
         0,
       );
 
-      expect(centerDistance).toBeCloseTo(halfWidthTotal + 1, 10);
+      expect(centerDistance).toBeCloseTo(halfWidthTotal, 10);
     }
   });
 
-  it("片側のノードだけが同じ帯には隙間を設けない", () => {
+  it("異なる終点の隣接帯は点数幅だけ離す", () => {
     const layout = createSankeyDiagramLayout(
       result,
       contributorSelection,
@@ -437,7 +499,7 @@ describe("createSankeyDiagramLayout", () => {
 
     expect(selectedNode?.selected).toBe(true);
     expect(layout.nodes.some((node) => node.id.includes("#20"))).toBe(false);
-    expect(layout.links).toHaveLength(6);
+    expect(layout.links).toHaveLength(5);
     expect(layout.links.every((link) => link.selected)).toBe(true);
     expect(layout.highlightedPoints).toBe(7);
     expect(layout.totalAllocatedPoints).toBe(7);
@@ -458,7 +520,7 @@ describe("createSankeyDiagramLayout", () => {
     );
 
     expect(selectedNode?.selected).toBe(true);
-    expect(layout.links).toHaveLength(6);
+    expect(layout.links).toHaveLength(5);
     expect(layout.links.every((link) => link.selected)).toBe(true);
     expect(layout.highlightedPoints).toBe(7);
     expect(layout.totalAllocatedPoints).toBe(7);

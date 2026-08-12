@@ -34,22 +34,24 @@ export interface SankeyDiagramNode {
 
 export interface SankeyDiagramLink {
   id: string;
-  sourceId: string;
-  targetId: string;
   kind: ContributionKind;
   points: number;
   path: string;
-  width: number;
-  label: string;
+}
+
+export interface SankeyDiagramLinkGroup {
+  id: string;
+  sourceId: string;
+  targetId: string;
+  links: SankeyDiagramLink[];
   selected: boolean;
-  href: string;
 }
 
 export interface SankeyDiagramLayout {
   width: number;
   height: number;
   nodes: SankeyDiagramNode[];
-  links: SankeyDiagramLink[];
+  linkGroups: SankeyDiagramLinkGroup[];
   originCount: number;
   allocationCount: number;
   highlightedPoints: number;
@@ -80,9 +82,7 @@ interface FlowLink {
   targetId: string;
   kind: ContributionKind;
   points: number;
-  label: string;
   selected: boolean;
-  href: string;
 }
 
 interface FlowGraph {
@@ -93,7 +93,6 @@ interface FlowGraph {
 
 interface FlowGraphBuilder {
   selection: SankeyDiagramSelection;
-  rangeSelection: RangeSelection;
   nodes: Map<string, FlowNode>;
   links: FlowLink[];
   linkIds: Set<string>;
@@ -134,7 +133,7 @@ export function createSankeyDiagramLayout(
   selection: SankeyDiagramSelection,
   rangeSelection: RangeSelection,
 ): SankeyDiagramLayout {
-  const graph = collectFlowGraph(result, selection, rangeSelection);
+  const graph = collectFlowGraph(result, selection);
   if (graph.links.length === 0) {
     throw new Error("選択対象に関係する配点経路がありません。");
   }
@@ -166,7 +165,7 @@ export function createSankeyDiagramLayout(
       Math.max(...nodeLayouts.map((layout) => layout.y + layout.height)) +
       diagramPadding,
     nodes: createDiagramNodes(rangeSelection, nodeLayouts),
-    links: createDiagramLinks(graph.links, nodeLayouts),
+    linkGroups: createDiagramLinkGroups(graph.links, nodeLayouts),
     originCount: graph.nodes.filter((node) => targetIds.has(node.id) === false)
       .length,
     allocationCount: graph.allocationCount,
@@ -180,11 +179,9 @@ export function createSankeyDiagramLayout(
 function collectFlowGraph(
   result: LeaderboardResult,
   selection: SankeyDiagramSelection,
-  rangeSelection: RangeSelection,
 ): FlowGraph {
   const builder: FlowGraphBuilder = {
     selection,
-    rangeSelection,
     nodes: new Map<string, FlowNode>(),
     links: [],
     linkIds: new Set<string>(),
@@ -374,16 +371,7 @@ function collectWorkstreamFlows(
         targetId: issueId,
         kind: "issue",
         points,
-        label:
-          compactReferenceLabel(pullReference) +
-          " から " +
-          compactReferenceLabel(issueReference) +
-          " の Issue 配点へ " +
-          formatScore(points) +
-          " 点。" +
-          allocation.reason,
         selected,
-        href: sourceHref(issueReference, builder.rangeSelection),
       });
     }
   }
@@ -403,16 +391,7 @@ function addAllocationLink(
     targetId: actorId,
     kind: allocation.kind,
     points: allocation.points,
-    label:
-      allocation.sourceTitle +
-      " から " +
-      allocation.actor.login +
-      " へ " +
-      formatScore(allocation.points) +
-      " 点。" +
-      allocation.reason,
     selected,
-    href: sourceHref(allocation.source, builder.rangeSelection),
   });
   builder.allocationCount += 1;
   if (builder.selection.type === "contributor" && selected) {
@@ -450,10 +429,6 @@ function aggregateFlowLinks(links: FlowLink[]): FlowLink[] {
     aggregated.set(key, {
       ...current,
       points,
-      label:
-        "同じ始点・終点・配点種別の配点を合計 " +
-        formatScore(points) +
-        " 点",
     });
   }
   return [...aggregated.values()];
@@ -461,6 +436,10 @@ function aggregateFlowLinks(links: FlowLink[]): FlowLink[] {
 
 function flowLinkKey(link: FlowLink): string {
   return "flow:" + JSON.stringify([link.sourceId, link.targetId, link.kind]);
+}
+
+function flowEndpointKey(link: Pick<FlowLink, "sourceId" | "targetId">): string {
+  return "flow-group:" + JSON.stringify([link.sourceId, link.targetId]);
 }
 
 function addReferenceNode(
@@ -638,10 +617,10 @@ function createDiagramNodes(
   });
 }
 
-function createDiagramLinks(
+function createDiagramLinkGroups(
   flows: FlowLink[],
   nodeLayouts: NodeLayout[],
-): SankeyDiagramLink[] {
+): SankeyDiagramLinkGroup[] {
   const nodeById = new Map(
     nodeLayouts.map((layout) => [layout.flow.id, layout]),
   );
@@ -674,33 +653,69 @@ function createDiagramLinks(
     }
   }
 
-  return flows
-    .map((flow): SankeyDiagramLink => {
-      const source = nodeById.get(flow.sourceId);
-      const target = nodeById.get(flow.targetId);
-      const sourceY = sourceYByLink.get(flow.id);
-      const targetY = targetYByLink.get(flow.id);
-      assertNonNullable(source, flow.sourceId + " の始点ノードがありません。");
-      assertNonNullable(target, flow.targetId + " の終点ノードがありません。");
-      assertNonNullable(sourceY, flow.id + " の始点位置がありません。");
-      assertNonNullable(targetY, flow.id + " の終点位置がありません。");
-      return {
-        ...flow,
-        path: createPath(
-          source.x + source.width,
-          sourceY,
-          target.x,
-          targetY,
-        ),
-        width: scoreWidth(flow.points),
-      };
-    })
-    .sort(
+  const groups = new Map<string, SankeyDiagramLinkGroup>();
+  for (const flow of flows) {
+    const source = nodeById.get(flow.sourceId);
+    const target = nodeById.get(flow.targetId);
+    const sourceY = sourceYByLink.get(flow.id);
+    const targetY = targetYByLink.get(flow.id);
+    assertNonNullable(source, flow.sourceId + " の始点ノードがありません。");
+    assertNonNullable(target, flow.targetId + " の終点ノードがありません。");
+    assertNonNullable(sourceY, flow.id + " の始点位置がありません。");
+    assertNonNullable(targetY, flow.id + " の終点位置がありません。");
+    const groupId = flowEndpointKey(flow);
+    const group = groups.get(groupId);
+    if (group == null) {
+      groups.set(groupId, {
+        id: groupId,
+        sourceId: flow.sourceId,
+        targetId: flow.targetId,
+        links: [
+          {
+            id: flow.id,
+            kind: flow.kind,
+            points: flow.points,
+            path: createRibbonPath(
+              source.x + source.width,
+              sourceY,
+              target.x,
+              targetY,
+              scoreWidth(flow.points),
+            ),
+          },
+        ],
+        selected: flow.selected,
+      });
+      continue;
+    }
+    if (group.selected !== flow.selected) {
+      throw new Error(groupId + " の選択状態が一致しません。");
+    }
+    group.links.push({
+      id: flow.id,
+      kind: flow.kind,
+      points: flow.points,
+      path: createRibbonPath(
+        source.x + source.width,
+        sourceY,
+        target.x,
+        targetY,
+        scoreWidth(flow.points),
+      ),
+    });
+  }
+  for (const group of groups.values()) {
+    group.links.sort(
       (left, right) =>
-        Number(left.selected) - Number(right.selected) ||
         contributionKindOrder(left.kind) - contributionKindOrder(right.kind) ||
         left.id.localeCompare(right.id),
     );
+  }
+  return [...groups.values()].sort(
+    (left, right) =>
+      Number(left.selected) - Number(right.selected) ||
+      left.id.localeCompare(right.id),
+  );
 }
 
 function compareLinkedNodes(
@@ -716,9 +731,14 @@ function compareLinkedNodes(
   assertNonNullable(rightNode, rightNodeId + " の接続先ノードがありません。");
   return (
     leftNode.y - rightNode.y ||
-    contributionKindOrder(leftLink.kind) -
-      contributionKindOrder(rightLink.kind) ||
+    compareContributionKinds(leftLink, rightLink) ||
     leftLink.id.localeCompare(rightLink.id)
+  );
+}
+
+function compareContributionKinds(left: FlowLink, right: FlowLink): number {
+  return (
+    contributionKindOrder(left.kind) - contributionKindOrder(right.kind)
   );
 }
 
@@ -1026,30 +1046,49 @@ function scoreWidth(points: number): number {
   return Math.max(minimumFlowWidth, points * flowScale);
 }
 
-function createPath(
+function createRibbonPath(
   startX: number,
   startY: number,
   endX: number,
   endY: number,
+  width: number,
 ): string {
   const middleX = (startX + endX) / 2;
+  const halfWidth = width / 2;
   return (
     "M " +
     startX +
     " " +
-    startY +
+    (startY - halfWidth) +
     " C " +
     middleX +
     " " +
-    startY +
+    (startY - halfWidth) +
     ", " +
     middleX +
     " " +
-    endY +
+    (endY - halfWidth) +
     ", " +
     endX +
     " " +
-    endY
+    (endY - halfWidth) +
+    " L " +
+    endX +
+    " " +
+    (endY + halfWidth) +
+    " C " +
+    middleX +
+    " " +
+    (endY + halfWidth) +
+    ", " +
+    middleX +
+    " " +
+    (startY + halfWidth) +
+    ", " +
+    startX +
+    " " +
+    (startY + halfWidth) +
+    " Z"
   );
 }
 

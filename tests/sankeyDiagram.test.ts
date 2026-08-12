@@ -19,6 +19,8 @@ import { calculateLeaderboard } from "../src/services/calculateLeaderboard";
 import type { RangeSelection } from "../src/services/calculationScope";
 import {
   createSankeyDiagramLayout,
+  type SankeyDiagramLayout,
+  type SankeyDiagramLink,
   type SankeyDiagramSelection,
 } from "../src/services/sankeyDiagram";
 
@@ -312,10 +314,10 @@ describe("createSankeyDiagramLayout", () => {
     );
     const ids = [
       ...layout.nodes.map((node) => node.id),
-      ...layout.links.map((link) => link.id),
+      ...flattenLinks(layout).map((link) => link.id),
     ];
 
-    expect(layout.links).toHaveLength(6);
+    expect(flattenLinks(layout)).toHaveLength(6);
     expect(ids.some((id) => id.includes("review-loss"))).toBe(false);
     expect(ids.some((id) => id.includes("issue-loss"))).toBe(false);
     expect("unallocatedPoints" in layout).toBe(false);
@@ -329,16 +331,17 @@ describe("createSankeyDiagramLayout", () => {
     );
     const pullId = "pull:voicevox/voicevox#1";
     const issueId = "issue:voicevox/voicevox#10";
-    const directLink = layout.links.find(
+    const links = flattenLinks(layout);
+    const directLink = links.find(
       (link) =>
         link.sourceId === pullId &&
         link.targetId === "actor:alice" &&
         link.kind === "implementation",
     );
-    const issueInputLinks = layout.links.filter(
+    const issueInputLinks = links.filter(
       (link) => link.sourceId === pullId && link.targetId === issueId,
     );
-    const issueOutputLinks = layout.links.filter(
+    const issueOutputLinks = links.filter(
       (link) =>
         link.sourceId === issueId && link.targetId.startsWith("actor:"),
     );
@@ -369,16 +372,37 @@ describe("createSankeyDiagramLayout", () => {
       rangeSelection,
     );
     const roles = new Set(layout.nodes.map((node) => node.role));
-    const kinds = new Set(layout.links.map((link) => link.kind));
+    const kinds = new Set(flattenLinks(layout).map((link) => link.kind));
 
     expect(roles).toEqual(new Set(["pull", "issue", "actor"]));
     expect(kinds).toEqual(new Set(["implementation", "review", "issue"]));
     expect(
       layout.nodes.every((node) => node.href.startsWith("/")),
     ).toBe(true);
-    expect(
-      layout.links.every((link) => link.href.startsWith("/")),
-    ).toBe(true);
+    expect(layout.linkGroups.some((group) => group.selected === false)).toBe(
+      true,
+    );
+  });
+
+  it("選択対象外の帯を先に描画し選択対象の帯を後に描画する", () => {
+    const layout = createSankeyDiagramLayout(
+      result,
+      contributorSelection,
+      rangeSelection,
+    );
+    const actual = layout.linkGroups.map((group) => ({
+      id: group.id,
+      selected: group.selected,
+    }));
+    const expected = [...actual].sort(
+      (left, right) =>
+        Number(left.selected) - Number(right.selected) ||
+        left.id.localeCompare(right.id),
+    );
+
+    expect(actual).toEqual(expected);
+    expect(actual.some((group) => group.selected === false)).toBe(true);
+    expect(actual.some((group) => group.selected)).toBe(true);
   });
 
   it("同じ始点と終点と種別の配点を一本に集約する", () => {
@@ -387,7 +411,7 @@ describe("createSankeyDiagramLayout", () => {
       duplicateContributorSelection,
       rangeSelection,
     );
-    const parallelLinks = layout.links.filter(
+    const parallelLinks = flattenLinks(layout).filter(
       (link) =>
         link.sourceId === "pull:voicevox/voicevox#1" &&
         link.targetId === "actor:alice",
@@ -410,33 +434,31 @@ describe("createSankeyDiagramLayout", () => {
       parallelContributorSelection,
       rangeSelection,
     );
-    const parallelLinks = layout.links.filter(
+    const parallelLinks = flattenLinks(layout).filter(
       (link) =>
         link.sourceId === "pull:voicevox/voicevox#1" &&
         link.targetId === "actor:alice",
     );
 
     expect(parallelLinks).toHaveLength(2);
-    expect(new Set(parallelLinks.map((link) => link.kind))).toEqual(
-      new Set(["implementation", "review"]),
-    );
+    expect(parallelLinks.map((link) => link.kind)).toEqual([
+      "implementation",
+      "review",
+    ]);
     const paths = parallelLinks.map((link) => ({
       link,
-      path: parseCubicPath(link.path),
+      path: parseRibbonPath(link.path),
     }));
+    expect(parallelLinks[0]?.path.endsWith(" Z")).toBe(true);
     for (const t of [0, 0.25, 0.5, 0.75, 1]) {
-      const centers = paths.map(({ path }) => evaluateCubic(path, t));
-      const firstCenter = centers[0];
-      const secondCenter = centers[1];
-      assertNonNullable(firstCenter, "平行経路の一つ目の中心位置がありません。");
-      assertNonNullable(secondCenter, "平行経路の二つ目の中心位置がありません。");
-      const centerDistance = Math.abs(firstCenter - secondCenter);
-      const halfWidthTotal = paths.reduce(
-        (distance, { link }) => distance + link.width / 2,
-        0,
+      const firstPath = paths[0]?.path;
+      const secondPath = paths[1]?.path;
+      assertNonNullable(firstPath, "平行経路の一つ目の帯がありません。");
+      assertNonNullable(secondPath, "平行経路の二つ目の帯がありません。");
+      expect(evaluateRibbonBoundary(firstPath, "bottom", t)).toBeCloseTo(
+        evaluateRibbonBoundary(secondPath, "top", t),
+        10,
       );
-
-      expect(centerDistance).toBeCloseTo(halfWidthTotal, 10);
     }
   });
 
@@ -446,10 +468,10 @@ describe("createSankeyDiagramLayout", () => {
       contributorSelection,
       rangeSelection,
     );
-    const pullLinks = layout.links
+    const pullLinks = flattenLinks(layout)
       .filter((link) => link.sourceId === "pull:voicevox/voicevox#1")
-      .map((link) => ({ link, path: parseCubicPath(link.path) }))
-      .sort((left, right) => left.path.startY - right.path.startY);
+      .map((link) => ({ link, path: parseRibbonPath(link.path) }))
+      .sort((left, right) => left.path.startTopY - right.path.startTopY);
     const adjacent = pullLinks.find(
       (current, index) => {
         const next = pullLinks[index + 1];
@@ -464,10 +486,7 @@ describe("createSankeyDiagramLayout", () => {
     if (adjacent == null || next == null) {
       throw new Error("異なる終点の隣接リンクがありません。");
     }
-    expect(next.path.startY - adjacent.path.startY).toBeCloseTo(
-      (adjacent.link.width + next.link.width) / 2,
-      10,
-    );
+    expect(adjacent.path.startBottomY).toBeCloseTo(next.path.startTopY, 10);
   });
 
   it("直近期間指定をノードとリンクへ引き継ぐ", () => {
@@ -478,7 +497,6 @@ describe("createSankeyDiagramLayout", () => {
     );
     const hrefs = [
       ...layout.nodes.map((node) => node.href),
-      ...layout.links.map((link) => link.href),
     ];
 
     expect(hrefs.every((href) => href.endsWith("?period=2w"))).toBe(true);
@@ -499,8 +517,8 @@ describe("createSankeyDiagramLayout", () => {
 
     expect(selectedNode?.selected).toBe(true);
     expect(layout.nodes.some((node) => node.id.includes("#20"))).toBe(false);
-    expect(layout.links).toHaveLength(5);
-    expect(layout.links.every((link) => link.selected)).toBe(true);
+    expect(flattenLinks(layout)).toHaveLength(5);
+    expect(layout.linkGroups.every((group) => group.selected)).toBe(true);
     expect(layout.highlightedPoints).toBe(7);
     expect(layout.totalAllocatedPoints).toBe(7);
     expect(layout.contributorCount).toBe(2);
@@ -520,8 +538,8 @@ describe("createSankeyDiagramLayout", () => {
     );
 
     expect(selectedNode?.selected).toBe(true);
-    expect(layout.links).toHaveLength(5);
-    expect(layout.links.every((link) => link.selected)).toBe(true);
+    expect(flattenLinks(layout)).toHaveLength(5);
+    expect(layout.linkGroups.every((group) => group.selected)).toBe(true);
     expect(layout.highlightedPoints).toBe(7);
     expect(layout.totalAllocatedPoints).toBe(7);
   });
@@ -541,7 +559,7 @@ describe("createSankeyDiagramLayout", () => {
 
     expect(issueNode?.selected).toBe(true);
     expect(layout.nodes).toHaveLength(2);
-    expect(layout.links).toHaveLength(1);
+    expect(flattenLinks(layout)).toHaveLength(1);
     expect(layout.highlightedPoints).toBe(2);
     expect(layout.totalAllocatedPoints).toBe(2);
     expect(layout.originCount).toBe(1);
@@ -632,42 +650,94 @@ describe("createSankeyDiagramLayout", () => {
   });
 });
 
-interface CubicPath {
-  startY: number;
-  firstControlY: number;
-  secondControlY: number;
-  endY: number;
+interface RibbonPath {
+  startTopY: number;
+  topFirstControlY: number;
+  topSecondControlY: number;
+  endTopY: number;
+  endBottomY: number;
+  bottomFirstControlY: number;
+  bottomSecondControlY: number;
+  startBottomY: number;
 }
 
-function parseCubicPath(path: string): CubicPath {
+function flattenLinks(
+  layout: SankeyDiagramLayout,
+): Array<SankeyDiagramLink & {
+  sourceId: string;
+  targetId: string;
+  selected: boolean;
+}> {
+  return layout.linkGroups.flatMap((group) =>
+    group.links.map((link) => ({
+      ...link,
+      sourceId: group.sourceId,
+      targetId: group.targetId,
+      selected: group.selected,
+    })),
+  );
+}
+
+function parseRibbonPath(path: string): RibbonPath {
   const values = path
     .match(/-?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?/gi)
     ?.map(Number);
-  if (values == null || values.length !== 8) {
-    throw new Error("サンキー経路の曲線を解釈できません。");
+  if (values == null || values.length !== 16) {
+    throw new Error("サンキー経路の帯を解釈できません。");
   }
-  const startY = values[1];
-  const firstControlY = values[3];
-  const secondControlY = values[5];
-  const endY = values[7];
+  const startTopY = values[1];
+  const topFirstControlY = values[3];
+  const topSecondControlY = values[5];
+  const endTopY = values[7];
+  const endBottomY = values[9];
+  const bottomFirstControlY = values[11];
+  const bottomSecondControlY = values[13];
+  const startBottomY = values[15];
   if (
-    startY == null ||
-    firstControlY == null ||
-    secondControlY == null ||
-    endY == null
+    startTopY == null ||
+    topFirstControlY == null ||
+    topSecondControlY == null ||
+    endTopY == null ||
+    endBottomY == null ||
+    bottomFirstControlY == null ||
+    bottomSecondControlY == null ||
+    startBottomY == null
   ) {
-    throw new Error("サンキー経路の曲線位置がありません。");
+    throw new Error("サンキー経路の帯位置がありません。");
   }
-  return { startY, firstControlY, secondControlY, endY };
+  return {
+    startTopY,
+    topFirstControlY,
+    topSecondControlY,
+    endTopY,
+    endBottomY,
+    bottomFirstControlY,
+    bottomSecondControlY,
+    startBottomY,
+  };
 }
 
-function evaluateCubic(path: CubicPath, t: number): number {
+function evaluateRibbonBoundary(
+  path: RibbonPath,
+  boundary: "top" | "bottom",
+  t: number,
+): number {
   const inverse = 1 - t;
+  const startY = boundary === "top" ? path.startTopY : path.startBottomY;
+  const firstControlY =
+    boundary === "top"
+      ? path.topFirstControlY
+      : path.bottomFirstControlY;
+  const secondControlY =
+    boundary === "top"
+      ? path.topSecondControlY
+      : path.bottomSecondControlY;
+  const endY = boundary === "top" ? path.endTopY : path.endBottomY;
   return (
-    inverse ** 3 * path.startY +
-    3 * inverse ** 2 * t * path.firstControlY +
-    3 * inverse * t ** 2 * path.secondControlY +
-    t ** 3 * path.endY
+    inverse ** 3 * startY +
+    3 * inverse ** 2 * t * firstControlY +
+    3 * inverse * t ** 2 * secondControlY +
+    t ** 3 * endY
   );
 }
 

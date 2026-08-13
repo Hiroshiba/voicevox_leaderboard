@@ -29,6 +29,15 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .cache/eslint
+            node_modules/.tmp/*.tsbuildinfo
+          key: static-analysis-${{ runner.os }}-${{ github.workflow }}-${{ hashFiles('pnpm-lock.yaml', 'package.json', 'eslint.config.js', 'tsconfig*.json') }}-${{ github.sha }}
+          restore-keys: |
+            static-analysis-${{ runner.os }}-${{ github.workflow }}-${{ hashFiles('pnpm-lock.yaml', 'package.json', 'eslint.config.js', 'tsconfig*.json') }}-
+
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test

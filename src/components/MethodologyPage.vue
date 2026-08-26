@@ -111,8 +111,15 @@ defineProps<{
           </div>
         </dl>
         <p class="mt-5 text-sm leading-7 text-muted">
+          PR 作成点は重要度の 10%です。
+          集計期間内に作成された PR の人間の作者へ一度だけ配分し、共同作者へは分配しません。
+          レビュー保証、PR の状態、フルAI実装の係数は掛けません。
+          作成日が期間外または作者が Bot の場合は配点対象外です。
+        </p>
+        <p class="mt-3 text-sm leading-7 text-muted">
           実装枠には状態に応じた係数を掛けます。
           未マージ PR は、作者以外の人間による承認または実質レビューがなければ実装枠を配分しません。
+          期間内作成で人間の作者がいる未マージ PR には PR 作成点を配分します。
         </p>
         <p class="mt-3 text-sm leading-7 text-muted">
           レビュー枠には状態係数を掛けません。
@@ -131,14 +138,17 @@ defineProps<{
         <div class="mt-5 grid gap-5 lg:grid-cols-3">
           <div>
             <p class="font-semibold text-emerald-800">
-              実装 最大 65%
+              PR 作成 10% と実装 最大 55%
             </p>
             <p class="mt-2 text-sm leading-7 text-muted">
-              PR の実装質量に比例して分けます。共同作者がいなければ作者へ全量を配点します。
-              共同作者がいる場合は作者へ 70%、共同作者全体へ 30%を配点します。
+              PR 作成点は集計期間内に作成された PR の人間の作者へ一度だけ配分します。
+              共同作者へは分配せず、レビュー保証、PR の状態、フルAI実装の係数も掛けません。
+              作成日が期間外または作者が Bot の場合は作成枠を配点対象外とします。
+              実装枠は PR の実装質量に比例して分けます。
+              共同作者がいなければ作者へ全量を配点し、共同作者がいる場合は作者へ 70%、共同作者全体へ 30%を配点します。
               マージまでに作者以外の人間による承認、実質レビュー、マージのいずれかがあれば、実装枠を全量配分します。
               独立した品質確認がないマージ済み PR は、実装枠の 50%だけを配分します。
-              未マージ PR は実装枠を配分しません。
+              独立した品質確認がない未マージ PR は実装枠を配分しません。
               フルAI実装リポジトリでは、さらに実装枠の 30%だけを配分します。
             </p>
           </div>
@@ -164,7 +174,10 @@ defineProps<{
         </div>
         <div class="mt-5 rounded-2xl bg-ink px-5 py-4 text-white">
           <p class="overflow-x-auto font-mono text-sm leading-7 whitespace-nowrap">
-            実装配分枠 = 0.65 I × A × G × T
+            PR 作成配分枠 = 0.10 I
+          </p>
+          <p class="mt-1 overflow-x-auto font-mono text-sm leading-7 whitespace-nowrap">
+            実装配分枠 = 0.55 I × A × G × T
           </p>
           <p class="mt-1 text-sm leading-6 text-white/70">
             A は独立した品質確認があれば 1、なければマージ済みは 0.5、未マージは 0 です。
@@ -172,8 +185,11 @@ defineProps<{
             T はマージ済みなら 1、オープンなら 0.5、クローズ済みなら 0.25 です。
           </p>
         </div>
+        <p class="mt-3 text-sm leading-7 text-muted">
+          集計期間内に作成され、人間の作者がいて、独立した品質確認があり、フルAI実装の対象外であるマージ済み PR は、PR 作成点と実装点を合わせて重要度の 65%を配分します。
+        </p>
         <p class="mt-5 rounded-xl bg-paper/70 p-4 text-sm leading-7 text-muted">
-          Bot 作者分、配点対象レビューがない枠、関連 Issue がない枠などは配点対象外です。
+          Bot 作者の PR 作成枠、作成日が期間外の PR 作成枠、配点対象レビューがない枠、関連 Issue がない枠などは配点対象外です。
           配点対象外の点は人物の順位へ加えません。
         </p>
         <p class="mt-4 text-sm leading-7 text-muted">
@@ -196,8 +212,9 @@ defineProps<{
         </p>
         <p class="mt-3 text-sm leading-7 text-muted">
           実装枠は 30%だけを作者と共同作者へ配分し、残りは配点対象外とします。
+          PR 作成点はフルAI実装の係数を掛けず、人間の作者へ配分します。
           コードを書いたのは AI で、人間の実装側の関与は指示と受け入れに限られるためです。
-          レビュー枠と Issue・調査枠の割合は変えません。
+          レビュー枠は 20%、Issue・調査枠は 15%です。
           AI が書いたコードを人間が確認する作業は、他のリポジトリと同じ価値があるためです。
         </p>
         <div class="mt-5 rounded-xl bg-paper/70 p-4 text-sm">

@@ -220,6 +220,7 @@ function calculateWorkstream(
   const title = scoringIssue?.title ?? firstScoringPull.pull.title;
   const source = createSourceReference(scoringIssue, firstScoringPull.pull);
   const sourceTitle = createSourceTitle(scoringIssue, firstScoringPull.pull);
+  const pullCreation = allocatePullCreation(group, importance, range);
   const implementation = allocateImplementation(group, importance, range);
   const review = allocateReviews(
     group,
@@ -237,11 +238,13 @@ function calculateWorkstream(
     merged,
   );
   const allocations = [
+    ...pullCreation.allocations,
     ...implementation.allocations,
     ...review.allocations,
     ...issue.allocations,
   ];
   const unallocatedEntries = [
+    ...pullCreation.unallocatedEntries,
     ...implementation.unallocatedEntries,
     ...review.unallocatedEntries,
     ...issue.unallocatedEntries,
@@ -265,7 +268,9 @@ function calculateWorkstream(
     conventionalBonus,
     importance,
     implementationPoints: sum(
-      implementation.allocations.map((allocation) => allocation.points),
+      [...pullCreation.allocations, ...implementation.allocations].map(
+        (allocation) => allocation.points,
+      ),
     ),
     reviewPoints: sum(
       review.allocations.map((allocation) => allocation.points),
@@ -279,6 +284,58 @@ function calculateWorkstream(
     ),
     unallocatedEntries,
   };
+}
+
+function allocatePullCreation(
+  group: WorkstreamGroup,
+  importance: number,
+  range: DateRange,
+): AllocationResult {
+  const totalMass = sum(group.pulls.map(({ pull }) => pull.mass));
+  if (totalMass <= 0) {
+    throw new Error("ワークストリームの実装質量が正の値ではありません。");
+  }
+
+  const allocations: ScoreAllocation[] = [];
+  const unallocatedEntries: UnallocatedScore[] = [];
+  for (const { pull } of group.pulls) {
+    const pullPool = 0.1 * importance * (pull.mass / totalMass);
+    const source = createPullSource(pull);
+    const sourceTitle = createPullTitle(pull);
+    const inRange = isDateInRange(pull.createdAt, range);
+    const reasons: string[] = [];
+    if (inRange === false) {
+      reasons.push("PR 作成日 " + pull.createdAt + " が期間外");
+    }
+    if (pull.authorIsHuman === false) {
+      reasons.push("作者 " + pull.author.login + " が Bot ");
+    }
+    if (reasons.length > 0) {
+      unallocatedEntries.push(
+        createUnallocatedScore(
+          pull.key + ":implementation:creation:unallocated",
+          "implementation",
+          pullPool,
+          source,
+          sourceTitle,
+          reasons.join("、") + "のため PR 作成ポイントは配点対象外",
+        ),
+      );
+      continue;
+    }
+    allocations.push(
+      createAllocation(
+        pull.key + ":implementation:creation",
+        pull.author,
+        "implementation",
+        pullPool,
+        source,
+        sourceTitle,
+        "PR 作成日 " + pull.createdAt + " が期間内のため作成ポイントを配分",
+      ),
+    );
+  }
+  return { allocations, unallocatedEntries };
 }
 
 function isMergedWorkstream(group: WorkstreamGroup): boolean {
@@ -312,7 +369,7 @@ function allocateImplementation(
   const unallocatedEntries: UnallocatedScore[] = [];
   for (const scoringPull of group.pulls) {
     const { pull, outcome, scoringDate } = scoringPull;
-    const pullPool = 0.65 * importance * (pull.mass / totalMass);
+    const pullPool = 0.55 * importance * (pull.mass / totalMass);
     const source = createPullSource(pull);
     const sourceTitle = createPullTitle(pull);
     if (isDateInRange(scoringDate, range) === false) {

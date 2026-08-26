@@ -159,8 +159,12 @@ describe("calculateLeaderboard", () => {
     const mergedWorkstream = calculateSinglePullWorkstream(mergedPull);
     const openWorkstream = calculateSinglePullWorkstream(openPull);
 
+    expect(mergedWorkstream.implementationPoints).toBeCloseTo(
+      mergedWorkstream.importance * 0.65,
+      12,
+    );
     expect(openWorkstream.implementationPoints).toBeCloseTo(
-      mergedWorkstream.implementationPoints * 0.5,
+      openWorkstream.importance * 0.375,
       12,
     );
   });
@@ -181,8 +185,12 @@ describe("calculateLeaderboard", () => {
     const mergedWorkstream = calculateSinglePullWorkstream(mergedPull);
     const closedWorkstream = calculateSinglePullWorkstream(closedPull);
 
+    expect(mergedWorkstream.implementationPoints).toBeCloseTo(
+      mergedWorkstream.importance * 0.65,
+      12,
+    );
     expect(closedWorkstream.implementationPoints).toBeCloseTo(
-      mergedWorkstream.implementationPoints * 0.25,
+      closedWorkstream.importance * 0.2375,
       12,
     );
   });
@@ -203,11 +211,50 @@ describe("calculateLeaderboard", () => {
         openPull.key + ":implementation:review-assurance:unallocated",
     );
 
-    expect(workstream.implementationPoints).toBe(0);
-    expect(assuranceLoss?.points).toBeCloseTo(
-      workstream.importance * 0.65,
+    expect(workstream.implementationPoints).toBeCloseTo(
+      workstream.importance * 0.1,
       12,
     );
+    expect(workstream.allocations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: openPull.key + ":implementation:creation",
+          actor: alice,
+          kind: "implementation",
+          points: workstream.importance * 0.1,
+        }),
+      ]),
+    );
+    expect(assuranceLoss?.points).toBeCloseTo(
+      workstream.importance * 0.55,
+      12,
+    );
+  });
+
+  it("作成ポイントを共同作者へ配分しない", () => {
+    const coauthoredPull: PreparedPull = {
+      ...pull(20, "2026-07-15T00:00:00Z"),
+      outcome: { kind: "open" },
+      coauthors: [bob],
+      reviews: [],
+      reviewThreads: [],
+      issueKey: undefined,
+    };
+
+    const workstream = calculateSinglePullWorkstream(coauthoredPull);
+    const creationAllocations = workstream.allocations.filter((allocation) =>
+      allocation.id === coauthoredPull.key + ":implementation:creation"
+    );
+
+    expect(creationAllocations).toHaveLength(1);
+    expect(creationAllocations[0]).toMatchObject({
+      actor: alice,
+      kind: "implementation",
+      points: workstream.importance * 0.1,
+    });
+    expect(
+      creationAllocations.some((allocation) => allocation.actor.login === bob.login),
+    ).toBe(false);
   });
 
   it("未マージ PR のレビュー枠へ状態係数を掛けない", () => {
@@ -278,7 +325,7 @@ describe("calculateLeaderboard", () => {
 
     expect(workstream.key).toBe("pr:" + mergedLater.key);
     expect(workstream.implementationPoints).toBeCloseTo(
-      workstream.importance * 0.65 * 0.5,
+      workstream.importance * 0.375,
       12,
     );
   });
@@ -309,7 +356,10 @@ describe("calculateLeaderboard", () => {
     });
     const workstream = findPullWorkstream(result, mergedLater.number);
 
-    expect(workstream.implementationPoints).toBe(0);
+    expect(workstream.implementationPoints).toBeCloseTo(
+      workstream.importance * 0.1,
+      12,
+    );
     expect(workstream.unallocatedEntries).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -346,6 +396,69 @@ describe("calculateLeaderboard", () => {
         }),
       ]),
     );
+  });
+
+  it("期間外作成と Bot 作者の作成ポイントを対象外明細へ記録する", () => {
+    const outOfRangePull: PreparedMergedPull = {
+      ...pull(21, "2026-07-15T00:00:00Z"),
+      createdAt: "2026-06-30T00:00:00Z",
+      issueKey: undefined,
+    };
+    const botPull: PreparedMergedPull = {
+      ...pull(22, "2026-07-15T00:00:00Z"),
+      author: actor("dependabot[bot]"),
+      authorIsHuman: false,
+      reviews: [],
+      reviewThreads: [],
+      issueKey: undefined,
+    };
+    const result = calculateLeaderboard(
+      {
+        ...dataset,
+        pulls: [outOfRangePull, botPull],
+        issues: [],
+      },
+      dataset.range,
+    );
+    const outOfRangeWorkstream = findPullWorkstream(result, 21);
+    const botWorkstream = findPullWorkstream(result, 22);
+    const outOfRangeLoss = outOfRangeWorkstream.unallocatedEntries.find(
+      (entry) =>
+        entry.id === outOfRangePull.key + ":implementation:creation:unallocated",
+    );
+    const botLoss = botWorkstream.unallocatedEntries.find(
+      (entry) =>
+        entry.id === botPull.key + ":implementation:creation:unallocated",
+    );
+
+    expect(outOfRangeLoss).toEqual({
+      id: outOfRangePull.key + ":implementation:creation:unallocated",
+      kind: "implementation",
+      points: outOfRangeWorkstream.importance * 0.1,
+      source: { type: "pull", key: outOfRangePull.key },
+      sourceTitle: expect.any(String),
+      reason:
+        "PR 作成日 2026-06-30T00:00:00Z が期間外のため PR 作成ポイントは配点対象外",
+    });
+    expect(botLoss).toEqual({
+      id: botPull.key + ":implementation:creation:unallocated",
+      kind: "implementation",
+      points: botWorkstream.importance * 0.1,
+      source: { type: "pull", key: botPull.key },
+      sourceTitle: expect.any(String),
+      reason:
+        "作者 dependabot[bot] が Bot のため PR 作成ポイントは配点対象外",
+    });
+    expect(
+      outOfRangeWorkstream.allocations.some((allocation) =>
+        allocation.id === outOfRangePull.key + ":implementation:creation"
+      ),
+    ).toBe(false);
+    expect(
+      botWorkstream.allocations.some((allocation) =>
+        allocation.id === botPull.key + ":implementation:creation"
+      ),
+    ).toBe(false);
   });
 
   it("未マージ PR の関連 Issue を独立 Issue として採点し続ける", () => {
@@ -426,10 +539,9 @@ describe("calculateLeaderboard", () => {
       ...workstream.unallocatedEntries.map((entry) => entry.id),
     ];
 
-    expect(implementationSources).toEqual([
-      "voicevox/voicevox#1",
-      "voicevox/voicevox#2",
-    ]);
+    expect(new Set(implementationSources)).toEqual(
+      new Set(["voicevox/voicevox#1", "voicevox/voicevox#2"]),
+    );
     expect(issueReasons).toEqual(
       expect.arrayContaining([
         expect.stringContaining("Issue 作成"),
@@ -503,11 +615,11 @@ describe("calculateLeaderboard", () => {
     }
 
     expect(workstream.implementationPoints).toBeCloseTo(
-      workstream.importance * 0.325,
+      workstream.importance * 0.375,
       12,
     );
     expect(workstream.unallocatedPoints).toBeCloseTo(
-      workstream.importance * 0.675,
+      workstream.importance * 0.625,
       12,
     );
     const qualityLoss = workstream.unallocatedEntries.find(
@@ -515,7 +627,7 @@ describe("calculateLeaderboard", () => {
         entry.id ===
         unreviewedPull.key + ":implementation:review-assurance:unallocated",
     );
-    expect(qualityLoss?.points).toBeCloseTo(workstream.importance * 0.325, 12);
+    expect(qualityLoss?.points).toBeCloseTo(workstream.importance * 0.275, 12);
     expect(qualityLoss?.reason).toContain("独立した品質確認なし");
   });
 
@@ -539,14 +651,14 @@ describe("calculateLeaderboard", () => {
     }
 
     expect(workstream.implementationPoints).toBeCloseTo(
-      workstream.importance * 0.195,
+      workstream.importance * 0.265,
       12,
     );
     const fullAiLoss = workstream.unallocatedEntries.find(
       (entry) =>
         entry.id === fullAiPull.key + ":implementation:full-ai:unallocated",
     );
-    expect(fullAiLoss?.points).toBeCloseTo(workstream.importance * 0.455, 12);
+    expect(fullAiLoss?.points).toBeCloseTo(workstream.importance * 0.385, 12);
     expect(fullAiLoss?.reason).toBe(
       "フルAI実装リポジトリのため実装枠の70%が配点対象外",
     );
@@ -580,22 +692,24 @@ describe("calculateLeaderboard", () => {
     }
 
     expect(workstream.implementationPoints).toBeCloseTo(
-      workstream.importance * 0.0975,
+      workstream.importance * 0.1825,
       12,
     );
     expect(
       workstream.allocations.map((allocation) => allocation.reason),
-    ).toEqual([
-      expect.stringContaining(
-        "フルAI実装リポジトリかつ独立した品質確認なしとして実装枠の15%を配分",
-      ),
-    ]);
+    ).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
+          "フルAI実装リポジトリかつ独立した品質確認なしとして実装枠の15%を配分",
+        ),
+      ]),
+    );
     const qualityLoss = workstream.unallocatedEntries.find(
       (entry) =>
         entry.id ===
         fullAiPull.key + ":implementation:review-assurance:unallocated",
     );
-    expect(qualityLoss?.points).toBeCloseTo(workstream.importance * 0.0975, 12);
+    expect(qualityLoss?.points).toBeCloseTo(workstream.importance * 0.0825, 12);
     expect(qualityLoss?.reason).toBe(
       "独立した品質確認なしのため実装枠の15%が配点対象外",
     );

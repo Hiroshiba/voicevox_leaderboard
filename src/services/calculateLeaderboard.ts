@@ -17,8 +17,9 @@ import type {
   UnallocatedScore,
   WorkstreamScore,
 } from "../domain/model.ts";
+import { isFullAiRepository } from "../domain/fullAiRepositories.ts";
 import {
-  calculateFullAiImplementationCredit,
+  calculateAiActivityCredit,
   calculateImplementationReviewAssurance,
   calculateImplementationStateCredit,
   calculateImportance,
@@ -62,6 +63,7 @@ interface ReviewEventBase {
   id: string;
   actor: Actor;
   createdAt: string;
+  fullAiImplementation: boolean;
   source: SourceReference;
   sourceTitle: string;
 }
@@ -78,6 +80,10 @@ interface AllocationResult {
   unallocatedEntries: UnallocatedScore[];
 }
 
+interface ReviewOrigin extends WeightedOrigin {
+  fullAiImplementation: boolean;
+}
+
 /** 事前取得データを指定期間のリーダーボードへ変換する。 */
 export function calculateLeaderboard(
   dataset: LeaderboardDataset,
@@ -87,10 +93,17 @@ export function calculateLeaderboard(
   const issueByKey = new Map(
     dataset.issues.map((issue) => [issue.key, issue]),
   );
+  const fullAiRepositories = new Set(
+    dataset.repositories
+      .filter((repository) => repository.fullAiImplementation)
+      .map((repository) => repository.nameWithOwner.toLowerCase()),
+  );
   const pulls = selectPullsForScoring(dataset.pulls, range);
   const groups = groupWorkstreams(pulls, issueByKey);
   const workstreams = groups
-    .map((group) => calculateWorkstream(group, range))
+    .map((group) =>
+      calculateWorkstream(group, range, fullAiRepositories),
+    )
     .sort(
       (left, right) =>
         right.importance - left.importance ||
@@ -106,7 +119,12 @@ export function calculateLeaderboard(
   );
   const standaloneIssues = dataset.issues
     .map((issue) =>
-      calculateStandaloneIssue(issue, range, linkedIssueKeys),
+      calculateStandaloneIssue(
+        issue,
+        range,
+        linkedIssueKeys,
+        fullAiRepositories,
+      ),
     )
     .filter((issue): issue is StandaloneIssueScore => issue != null)
     .sort(
@@ -194,6 +212,7 @@ function groupWorkstreams(
 function calculateWorkstream(
   group: WorkstreamGroup,
   range: DateRange,
+  fullAiRepositories: Set<string>,
 ): WorkstreamScore {
   const effectiveLines = sum(
     group.pulls.map(({ pull }) => pull.effectiveLines),
@@ -236,6 +255,7 @@ function calculateWorkstream(
     source,
     sourceTitle,
     merged,
+    fullAiRepositories,
   );
   const allocations = [
     ...pullCreation.allocations,
@@ -300,8 +320,28 @@ function allocatePullCreation(
   const unallocatedEntries: UnallocatedScore[] = [];
   for (const { pull } of group.pulls) {
     const pullPool = 0.1 * importance * (pull.mass / totalMass);
+    const activityCredit = calculateAiActivityCredit(
+      pull.fullAiImplementation,
+    );
+    const creditedPullPool = pullPool * activityCredit.creditRatio;
     const source = createPullSource(pull);
     const sourceTitle = createPullTitle(pull);
+    const aiUnallocatedPoints = pullPool - creditedPullPool;
+    if (aiUnallocatedPoints > 0) {
+      unallocatedEntries.push(
+        createUnallocatedScore(
+          pull.key + ":implementation:creation:ai:unallocated",
+          "implementation",
+          aiUnallocatedPoints,
+          source,
+          sourceTitle,
+          activityCredit.label +
+            "のため PR 作成枠の" +
+            formatPercent(1 - activityCredit.creditRatio) +
+            "%が配点対象外",
+        ),
+      );
+    }
     const inRange = isDateInRange(pull.createdAt, range);
     const reasons: string[] = [];
     if (inRange === false) {
@@ -315,7 +355,7 @@ function allocatePullCreation(
         createUnallocatedScore(
           pull.key + ":implementation:creation:unallocated",
           "implementation",
-          pullPool,
+          creditedPullPool,
           source,
           sourceTitle,
           reasons.join("、") + "のため PR 作成ポイントは配点対象外",
@@ -328,10 +368,19 @@ function allocatePullCreation(
         pull.key + ":implementation:creation",
         pull.author,
         "implementation",
-        pullPool,
+        creditedPullPool,
         source,
         sourceTitle,
-        "PR 作成日 " + pull.createdAt + " が期間内のため作成ポイントを配分",
+        "PR 作成日 " +
+          pull.createdAt +
+          " が期間内のため作成ポイントを配分" +
+          (activityCredit.type === "ai"
+            ? "、" +
+              activityCredit.label +
+              "として作成枠の" +
+              formatPercent(activityCredit.creditRatio) +
+              "%を配分"
+            : ""),
       ),
     );
   }
@@ -386,7 +435,9 @@ function allocateImplementation(
       continue;
     }
 
-    const fullAiCredit = calculateFullAiImplementationCredit(pull);
+    const activityCredit = calculateAiActivityCredit(
+      pull.fullAiImplementation,
+    );
     const reviewAssurance = calculateImplementationReviewAssurance(
       {
         ...pull,
@@ -395,13 +446,13 @@ function allocateImplementation(
       range.end,
     );
     const stateCredit = calculateImplementationStateCredit(outcome);
-    const fullAiPullPool = pullPool * fullAiCredit.creditRatio;
+    const creditedPullPool = pullPool * activityCredit.creditRatio;
     const reviewedPullPool =
-      fullAiPullPool * reviewAssurance.creditRatio;
+      creditedPullPool * reviewAssurance.creditRatio;
     const distributablePullPool = reviewedPullPool * stateCredit.creditRatio;
     const assuranceLabel =
-      fullAiCredit.type === "fullAi"
-        ? fullAiCredit.label + "かつ" + reviewAssurance.label
+      activityCredit.type === "ai"
+        ? activityCredit.label + "かつ" + reviewAssurance.label
         : reviewAssurance.label;
     const creditLabel =
       stateCredit.type === "merged"
@@ -417,29 +468,29 @@ function allocateImplementation(
       creditLabel +
       "として実装枠の" +
       formatPercent(
-        fullAiCredit.creditRatio *
+        activityCredit.creditRatio *
           reviewAssurance.creditRatio *
           stateCredit.creditRatio,
       ) +
       "%を配分";
-    const fullAiUnallocatedPoints = pullPool - fullAiPullPool;
-    if (fullAiUnallocatedPoints > 0) {
+    const aiUnallocatedPoints = pullPool - creditedPullPool;
+    if (aiUnallocatedPoints > 0) {
       unallocatedEntries.push(
         createUnallocatedScore(
-          pull.key + ":implementation:full-ai:unallocated",
+          pull.key + ":implementation:ai:unallocated",
           "implementation",
-          fullAiUnallocatedPoints,
+          aiUnallocatedPoints,
           source,
           sourceTitle,
-          fullAiCredit.label +
+          activityCredit.label +
             "のため実装枠の" +
-            formatPercent(1 - fullAiCredit.creditRatio) +
+            formatPercent(1 - activityCredit.creditRatio) +
             "%が配点対象外",
         ),
       );
     }
     const qualityUnallocatedPoints =
-      fullAiPullPool - reviewedPullPool;
+      creditedPullPool - reviewedPullPool;
     if (qualityUnallocatedPoints > 0) {
       unallocatedEntries.push(
         createUnallocatedScore(
@@ -451,7 +502,7 @@ function allocateImplementation(
           reviewAssurance.label +
             "のため実装枠の" +
             formatPercent(
-              fullAiCredit.creditRatio * (1 - reviewAssurance.creditRatio),
+              activityCredit.creditRatio * (1 - reviewAssurance.creditRatio),
             ) +
             "%が配点対象外",
         ),
@@ -469,7 +520,7 @@ function allocateImplementation(
           stateCredit.label +
             "のため実装枠の" +
             formatPercent(
-              fullAiCredit.creditRatio *
+              activityCredit.creditRatio *
                 reviewAssurance.creditRatio *
                 (1 - stateCredit.creditRatio),
             ) +
@@ -548,6 +599,7 @@ function allocateReviews(
         type: "submission",
         actor: review.actor,
         createdAt: review.submittedAt,
+        fullAiImplementation: pull.fullAiImplementation,
         source: pullSource,
         sourceTitle: pullTitle,
         hasSubstantiveSummary: review.hasSubstantiveSummary,
@@ -562,6 +614,7 @@ function allocateReviews(
         type: "thread",
         actor: thread.actor,
         createdAt: thread.createdAt,
+        fullAiImplementation: pull.fullAiImplementation,
         source: pullSource,
         sourceTitle: pullTitle,
       });
@@ -587,35 +640,80 @@ function allocateReviews(
     };
   }
   const allocatedPoints = maximumPoints * Math.min(1, totalWeight / 5);
-  const allocations = origins.map((origin) =>
-    createAllocation(
-      origin.id,
-      origin.actor,
-      "review",
-      allocatedPoints * (origin.weight / totalWeight),
-      origin.source,
-      origin.sourceTitle,
-      origin.reason,
-    ),
-  );
+  const allocations: ScoreAllocation[] = [];
+  const aiUnallocatedByPull = new Map<
+    string,
+    { points: number; source: SourceReference; sourceTitle: string }
+  >();
+  for (const origin of origins) {
+    const originPoints = allocatedPoints * (origin.weight / totalWeight);
+    const activityCredit = calculateAiActivityCredit(
+      origin.fullAiImplementation,
+    );
+    const creditedPoints = originPoints * activityCredit.creditRatio;
+    if (creditedPoints > 0) {
+      allocations.push(
+        createAllocation(
+          origin.id,
+          origin.actor,
+          "review",
+          creditedPoints,
+          origin.source,
+          origin.sourceTitle,
+          origin.reason +
+            (activityCredit.type === "ai"
+              ? "、" +
+                activityCredit.label +
+                "としてレビュー枠の" +
+                formatPercent(activityCredit.creditRatio) +
+                "%を配分"
+              : ""),
+        ),
+      );
+    }
+    const aiUnallocatedPoints = originPoints - creditedPoints;
+    if (aiUnallocatedPoints > 0) {
+      const current = aiUnallocatedByPull.get(origin.source.key);
+      if (current == null) {
+        aiUnallocatedByPull.set(origin.source.key, {
+          points: aiUnallocatedPoints,
+          source: origin.source,
+          sourceTitle: origin.sourceTitle,
+        });
+      } else {
+        current.points += aiUnallocatedPoints;
+      }
+    }
+  }
   const unallocatedPoints = maximumPoints - allocatedPoints;
+  const unallocatedEntries = [...aiUnallocatedByPull.entries()].map(
+    ([pullKey, entry]) =>
+      createUnallocatedScore(
+        pullKey + ":review:ai:unallocated",
+        "review",
+        entry.points,
+        entry.source,
+        entry.sourceTitle,
+        "AI 由来の活動のためレビュー枠の70%が配点対象外",
+      ),
+  );
+  if (unallocatedPoints > 0) {
+    unallocatedEntries.push(
+      createUnallocatedScore(
+        group.key + ":review:unallocated",
+        "review",
+        unallocatedPoints,
+        source,
+        sourceTitle,
+        "レビュー重み " +
+          totalWeight.toFixed(2) +
+          " が上限 5 に満たないため残りは配点対象外",
+      ),
+    );
+  }
   return {
     allocations,
-    unallocatedEntries:
-      unallocatedPoints === 0
-        ? []
-        : [
-            createUnallocatedScore(
-              group.key + ":review:unallocated",
-              "review",
-              unallocatedPoints,
-              source,
-              sourceTitle,
-              "レビュー重み " +
-                totalWeight.toFixed(2) +
-                " が上限 5 に満たないため残りは配点対象外",
-            ),
-          ],
+    unallocatedEntries,
   };
 }
 
@@ -626,6 +724,7 @@ function allocateLinkedIssue(
   source: SourceReference,
   sourceTitle: string,
   merged: boolean,
+  fullAiRepositories: Set<string>,
 ): AllocationResult {
   const maximumPoints = 0.15 * importance;
   if (merged === false) {
@@ -677,9 +776,30 @@ function allocateLinkedIssue(
       ],
     };
   }
+  const activityCredit = calculateAiActivityCredit(
+    isFullAiRepository(fullAiRepositories, group.issue.repository),
+  );
+  const creditedMaximumPoints = maximumPoints * activityCredit.creditRatio;
+  const unallocatedEntries: UnallocatedScore[] = [];
+  const aiUnallocatedPoints = maximumPoints - creditedMaximumPoints;
+  if (aiUnallocatedPoints > 0) {
+    unallocatedEntries.push(
+      createUnallocatedScore(
+        group.key + ":issue:ai:unallocated",
+        "issue",
+        aiUnallocatedPoints,
+        source,
+        sourceTitle,
+        activityCredit.label +
+          "のため Issue 枠の" +
+          formatPercent(1 - activityCredit.creditRatio) +
+          "%が配点対象外",
+      ),
+    );
+  }
   return {
-    allocations: allocateIssueActivity(activity, maximumPoints),
-    unallocatedEntries: [],
+    allocations: allocateIssueActivity(activity, creditedMaximumPoints),
+    unallocatedEntries,
   };
 }
 
@@ -687,6 +807,7 @@ function calculateStandaloneIssue(
   issue: PreparedIssue,
   range: DateRange,
   linkedIssueKeys: Set<string>,
+  fullAiRepositories: Set<string>,
 ): StandaloneIssueScore | undefined {
   if (issue.activityCandidate === false || linkedIssueKeys.has(issue.key)) {
     return undefined;
@@ -713,7 +834,10 @@ function calculateStandaloneIssue(
     activity.evidenceKinds.size,
     activity.substantiveCommentCount,
     activity.participantCount,
-  );
+  ) *
+    calculateAiActivityCredit(
+      isFullAiRepository(fullAiRepositories, issue.repository),
+    ).creditRatio;
   const totalWeight = sum(
     activity.weightedOrigins.map((origin) => origin.weight),
   );
@@ -931,8 +1055,8 @@ function addReviewEvent(
 
 function createReviewOrigins(
   eventsByActor: Map<string, ReviewEvent[]>,
-): WeightedOrigin[] {
-  const origins: WeightedOrigin[] = [];
+): ReviewOrigin[] {
+  const origins: ReviewOrigin[] = [];
   for (const events of eventsByActor.values()) {
     events.sort(
       (left, right) =>
@@ -945,6 +1069,7 @@ function createReviewOrigins(
       id: firstEvent.id + ":participation",
       actor: firstEvent.actor,
       weight: 1,
+      fullAiImplementation: firstEvent.fullAiImplementation,
       source: firstEvent.source,
       sourceTitle: firstEvent.sourceTitle,
       reason:
@@ -965,6 +1090,7 @@ function createReviewOrigins(
           id: event.id + ":summary",
           actor: event.actor,
           weight: 1,
+          fullAiImplementation: event.fullAiImplementation,
           source: event.source,
           sourceTitle: event.sourceTitle,
           reason:
@@ -977,6 +1103,7 @@ function createReviewOrigins(
           id: event.id,
           actor: event.actor,
           weight: 1,
+          fullAiImplementation: event.fullAiImplementation,
           source: event.source,
           sourceTitle: event.sourceTitle,
           reason:

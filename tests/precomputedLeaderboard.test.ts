@@ -651,16 +651,16 @@ describe("calculateLeaderboard", () => {
     }
 
     expect(workstream.implementationPoints).toBeCloseTo(
-      workstream.importance * 0.265,
+      workstream.importance * 0.195,
       12,
     );
     const fullAiLoss = workstream.unallocatedEntries.find(
       (entry) =>
-        entry.id === fullAiPull.key + ":implementation:full-ai:unallocated",
+        entry.id === fullAiPull.key + ":implementation:ai:unallocated",
     );
     expect(fullAiLoss?.points).toBeCloseTo(workstream.importance * 0.385, 12);
     expect(fullAiLoss?.reason).toBe(
-      "フルAI実装リポジトリのため実装枠の70%が配点対象外",
+      "AI 由来の活動のため実装枠の70%が配点対象外",
     );
   });
 
@@ -692,7 +692,7 @@ describe("calculateLeaderboard", () => {
     }
 
     expect(workstream.implementationPoints).toBeCloseTo(
-      workstream.importance * 0.1825,
+      workstream.importance * 0.1125,
       12,
     );
     expect(
@@ -700,7 +700,7 @@ describe("calculateLeaderboard", () => {
     ).toEqual(
       expect.arrayContaining([
         expect.stringContaining(
-          "フルAI実装リポジトリかつ独立した品質確認なしとして実装枠の15%を配分",
+          "AI 由来の活動かつ独立した品質確認なしとして実装枠の15%を配分",
         ),
       ]),
     );
@@ -713,6 +713,257 @@ describe("calculateLeaderboard", () => {
     expect(qualityLoss?.reason).toBe(
       "独立した品質確認なしのため実装枠の15%が配点対象外",
     );
+  });
+
+  it("AI 由来の PR と関連 Issue の活動をすべて 0.3 倍にする", () => {
+    const aiPull: PreparedMergedPull = {
+      ...pull(23, "2026-07-15T00:00:00Z"),
+      fullAiImplementation: true,
+    };
+    const aiDataset: LeaderboardDataset = {
+      ...dataset,
+      repositories: [
+        {
+          ...firstRepository(),
+          fullAiImplementation: true,
+        },
+      ],
+      pulls: [aiPull],
+    };
+
+    const result = calculateLeaderboard(aiDataset, dataset.range);
+    const workstream = findPullWorkstream(result, aiPull.number);
+
+    expect(workstream.implementationPoints).toBeCloseTo(
+      workstream.importance * 0.195,
+      12,
+    );
+    expect(workstream.reviewPoints).toBeCloseTo(
+      workstream.importance * 0.024,
+      12,
+    );
+    expect(workstream.issuePoints).toBeCloseTo(
+      workstream.importance * 0.045,
+      12,
+    );
+    expect(workstream.unallocatedEntries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: aiPull.key + ":implementation:creation:ai:unallocated",
+          points: workstream.importance * 0.07,
+          reason: "AI 由来の活動のため PR 作成枠の70%が配点対象外",
+        }),
+        expect.objectContaining({
+          id: aiPull.key + ":implementation:ai:unallocated",
+          points: workstream.importance * 0.385,
+          reason: "AI 由来の活動のため実装枠の70%が配点対象外",
+        }),
+        expect.objectContaining({
+          id: aiPull.key + ":review:ai:unallocated",
+          points: expect.any(Number),
+          reason: "AI 由来の活動のためレビュー枠の70%が配点対象外",
+        }),
+        expect.objectContaining({
+          id: "voicevox/voicevox#10:issue:ai:unallocated",
+          points: workstream.importance * 0.105,
+          reason: "AI 由来の活動のため Issue 枠の70%が配点対象外",
+        }),
+      ]),
+    );
+    const reviewAiLoss = workstream.unallocatedEntries.find(
+      (entry) => entry.id === aiPull.key + ":review:ai:unallocated",
+    );
+    expect(reviewAiLoss?.points).toBeCloseTo(
+      workstream.importance * 0.056,
+      12,
+    );
+    const traceIds = [
+      ...workstream.allocations.map((allocation) => allocation.id),
+      ...workstream.unallocatedEntries.map((entry) => entry.id),
+    ];
+    expect(new Set(traceIds).size).toBe(traceIds.length);
+    expect(
+      workstream.allocations.reduce(
+        (total, allocation) => total + allocation.points,
+        0,
+      ) +
+        workstream.unallocatedEntries.reduce(
+          (total, entry) => total + entry.points,
+          0,
+        ),
+    ).toBeCloseTo(workstream.importance, 12);
+  });
+
+  it("通常 PR と AI 由来 PR が混在しても PR ごとに係数を適用する", () => {
+    const normalPull: PreparedMergedPull = {
+      ...pull(24, "2026-07-15T00:00:00Z"),
+    };
+    const aiPull: PreparedMergedPull = {
+      ...pull(25, "2026-07-16T00:00:00Z"),
+      fullAiImplementation: true,
+      reviews: [
+        {
+          actor: dave,
+          submittedAt: "2026-07-16T00:00:00Z",
+          state: "APPROVED",
+          hasSubstantiveSummary: true,
+        },
+      ],
+    };
+    const mixedDataset: LeaderboardDataset = {
+      ...dataset,
+      pulls: [normalPull, aiPull],
+    };
+
+    const result = calculateLeaderboard(mixedDataset, dataset.range);
+    const workstream = findPullWorkstream(result, normalPull.number);
+    const normalReviewPoints = sumAllocationPoints(
+      workstream.allocations.filter(
+        (allocation) =>
+          allocation.kind === "review" &&
+          allocation.source.key === normalPull.key,
+      ),
+    );
+    const aiReviewPoints = sumAllocationPoints(
+      workstream.allocations.filter(
+        (allocation) =>
+          allocation.kind === "review" &&
+          allocation.source.key === aiPull.key,
+      ),
+    );
+    const normalImplementationPoints = sumAllocationPoints(
+      workstream.allocations.filter(
+        (allocation) =>
+          allocation.kind === "implementation" &&
+          allocation.source.key === normalPull.key,
+      ),
+    );
+
+    expect(workstream.implementationPoints).toBeCloseTo(
+      workstream.importance * 0.4225,
+      12,
+    );
+    expect(normalReviewPoints).toBeCloseTo(workstream.importance * 0.08, 12);
+    expect(aiReviewPoints).toBeCloseTo(workstream.importance * 0.024, 12);
+    expect(
+      workstream.unallocatedEntries.some(
+        (entry) => entry.id === aiPull.key + ":review:ai:unallocated",
+      ),
+    ).toBe(true);
+    expect(normalImplementationPoints).toBeCloseTo(
+      workstream.importance * 0.325,
+      12,
+    );
+  });
+
+  it("同じレビュアーの通常 PR と AI 由来 PR でレビュー上限を二重化しない", () => {
+    const normalPull: PreparedMergedPull = {
+      ...pull(26, "2026-07-15T23:59:00Z"),
+      reviews: [
+        {
+          actor: bob,
+          submittedAt: "2026-07-15T00:00:00Z",
+          state: "APPROVED",
+          hasSubstantiveSummary: false,
+        },
+      ],
+      reviewThreads: [
+        {
+          actor: bob,
+          createdAt: "2026-07-15T01:00:00Z",
+        },
+      ],
+    };
+    const aiPull: PreparedMergedPull = {
+      ...pull(27, "2026-07-16T23:59:00Z"),
+      fullAiImplementation: true,
+      reviews: [
+        {
+          actor: bob,
+          submittedAt: "2026-07-16T00:00:00Z",
+          state: "APPROVED",
+          hasSubstantiveSummary: true,
+        },
+      ],
+      reviewThreads: [
+        {
+          actor: bob,
+          createdAt: "2026-07-16T01:00:00Z",
+        },
+        {
+          actor: bob,
+          createdAt: "2026-07-16T02:00:00Z",
+        },
+        {
+          actor: bob,
+          createdAt: "2026-07-16T03:00:00Z",
+        },
+        {
+          actor: bob,
+          createdAt: "2026-07-16T04:00:00Z",
+        },
+      ],
+    };
+    const result = calculateLeaderboard(
+      {
+        ...dataset,
+        pulls: [normalPull, aiPull],
+      },
+      dataset.range,
+    );
+    const workstream = findPullWorkstream(result, normalPull.number);
+    const reviewAllocations = workstream.allocations.filter(
+      (allocation) => allocation.kind === "review",
+    );
+    const normalReviewPoints = sumAllocationPoints(
+      reviewAllocations.filter(
+        (allocation) => allocation.source.key === normalPull.key,
+      ),
+    );
+    const aiReviewPoints = sumAllocationPoints(
+      reviewAllocations.filter(
+        (allocation) => allocation.source.key === aiPull.key,
+      ),
+    );
+    const aiLoss = workstream.unallocatedEntries.find(
+      (entry) => entry.id === aiPull.key + ":review:ai:unallocated",
+    );
+
+    expect(reviewAllocations).toHaveLength(5);
+    expect(normalReviewPoints).toBeCloseTo(workstream.importance * 0.08, 12);
+    expect(aiReviewPoints).toBeCloseTo(workstream.importance * 0.036, 12);
+    expect(workstream.reviewPoints).toBeCloseTo(
+      workstream.importance * 0.116,
+      12,
+    );
+    expect(aiLoss?.points).toBeCloseTo(workstream.importance * 0.084, 12);
+  });
+
+  it("AI 由来の独立 Issue スコアを 0.3 倍にする", () => {
+    const aiIssueDataset: LeaderboardDataset = {
+      ...dataset,
+      repositories: [
+        {
+          ...firstRepository(),
+          fullAiImplementation: true,
+        },
+      ],
+      pulls: [],
+    };
+
+    const result = calculateLeaderboard(aiIssueDataset, dataset.range);
+    const standaloneIssue = result.standaloneIssues[0];
+    expect(standaloneIssue).toBeDefined();
+    if (standaloneIssue == null) {
+      throw new Error("検証対象の独立 Issue がありません。");
+    }
+    expect(standaloneIssue.score).toBeCloseTo(4.75 * 0.3, 12);
+    expect(
+      standaloneIssue.allocations.reduce(
+        (total, allocation) => total + allocation.points,
+        0,
+      ),
+    ).toBeCloseTo(standaloneIssue.score, 12);
   });
 
   it("Bot 作者へ渡らない実装枠を配点対象外とする", () => {
@@ -824,6 +1075,23 @@ function findPullWorkstream(
     throw new Error("検証対象の PR ワークストリームがありません。");
   }
   return workstream;
+}
+
+function sumAllocationPoints(
+  allocations: ReturnType<typeof calculateLeaderboard>["workstreams"][number]["allocations"],
+): number {
+  return allocations.reduce(
+    (total, allocation) => total + allocation.points,
+    0,
+  );
+}
+
+function firstRepository(): LeaderboardDataset["repositories"][number] {
+  const repository = dataset.repositories[0];
+  if (repository == null) {
+    throw new Error("検証対象のリポジトリがありません。");
+  }
+  return repository;
 }
 
 function pull(number: number, mergedAt: string): PreparedMergedPull {

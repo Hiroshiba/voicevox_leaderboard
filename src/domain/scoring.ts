@@ -66,14 +66,14 @@ type ImplementationStateCredit =
       label: string;
     };
 
-type FullAiImplementationCredit =
+type AiActivityCredit =
   | {
       type: "human";
       creditRatio: 1;
       label: string;
     }
   | {
-      type: "fullAi";
+      type: "ai";
       creditRatio: 0.3;
       label: string;
     };
@@ -170,21 +170,21 @@ export function getPullScoringDate(
   }
 }
 
-/** PR の実装体制と実装枠の配分率を決める。 */
-export function calculateFullAiImplementationCredit(
-  pull: PreparedPull,
-): FullAiImplementationCredit {
-  if (pull.fullAiImplementation) {
+/** AI 由来かどうかに応じた活動枠の配分率を決める。 */
+export function calculateAiActivityCredit(
+  isAiDerived: boolean,
+): AiActivityCredit {
+  if (isAiDerived) {
     return {
-      type: "fullAi",
+      type: "ai",
       creditRatio: 0.3,
-      label: "フルAI実装リポジトリ",
+      label: "AI 由来の活動",
     };
   }
   return {
     type: "human",
     creditRatio: 1,
-    label: "人間が実装するリポジトリ",
+    label: "通常の活動",
   };
 }
 

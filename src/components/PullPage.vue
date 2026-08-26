@@ -9,7 +9,7 @@ import type {
   WorkstreamScore,
 } from "../domain/model.ts";
 import {
-  calculateFullAiImplementationCredit,
+  calculateAiActivityCredit,
   calculateImplementationReviewAssurance,
   calculateImplementationStateCredit,
   contributionKindLabel,
@@ -48,8 +48,8 @@ const reviewAssurance = computed(() =>
     props.range.end,
   ),
 );
-const fullAiCredit = computed(() =>
-  calculateFullAiImplementationCredit(props.pull),
+const activityCredit = computed(() =>
+  calculateAiActivityCredit(props.pull.fullAiImplementation),
 );
 const stateCredit = computed(() =>
   calculateImplementationStateCredit(pullAtRangeEnd.value.outcome),
@@ -63,7 +63,7 @@ const scoringDateInRange = computed(() => {
 });
 const implementationCreditPercent = computed(() =>
   Math.round(
-    fullAiCredit.value.creditRatio *
+    activityCredit.value.creditRatio *
       reviewAssurance.value.creditRatio *
       stateCredit.value.creditRatio *
       100,
@@ -193,8 +193,8 @@ function kindClass(kind: ContributionKind): string {
         class="mt-4 rounded-xl bg-paper/70 px-4 py-3 text-sm leading-6 text-muted"
       >
         <p>
-          <span class="font-semibold text-ink">実装体制</span>
-          {{ fullAiCredit.label }}
+          <span class="font-semibold text-ink">活動区分</span>
+          {{ activityCredit.label }}
         </p>
         <p>
           <span class="font-semibold text-ink">状態係数</span>

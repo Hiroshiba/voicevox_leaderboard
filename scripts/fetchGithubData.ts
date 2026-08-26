@@ -1147,7 +1147,7 @@ async function main(): Promise<void> {
       "古い Issue の本文編集日時は特定できないため、本文の証拠要素は Issue 作成日が選択期間内の場合だけ数えます。",
       "複数 PR の Conventional Commits 補正は、PR 分割による加点を防ぐため最大値を一度だけ使います。",
       "共同作者は GitHub が関連付けたコミット作者と GitHub noreply 形式の Co-authored-by から解決します。",
-      "フルAI実装かどうかはリポジトリ単位の設定で決め、実装枠の係数を適用します。PR 作成点には適用しません。PR ごとの AI 利用は判定に使いません。",
+      "フルAI実装かどうかはリポジトリ単位の設定で決め、該当する PR の作成、実装、レビュー、関連 Issue と独立 Issue の活動へ 0.3 倍の係数を適用します。PR ごとの AI 利用は判定に使いません。",
     ],
     acquisition: client.getAcquisitionStats(),
   };

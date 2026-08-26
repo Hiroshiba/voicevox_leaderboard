@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  calculateAiActivityCredit,
   calculateConventionalBonus,
   calculateFileScore,
   calculateImplementationReviewAssurance,
@@ -199,6 +200,24 @@ describe("calculateImplementationStateCredit", () => {
     ).toMatchObject({
       type: "closed",
       creditRatio: 0.25,
+    });
+  });
+});
+
+describe("calculateAiActivityCredit", () => {
+  it("AI 由来の活動を 0.3 倍にする", () => {
+    expect(calculateAiActivityCredit(true)).toEqual({
+      type: "ai",
+      creditRatio: 0.3,
+      label: "AI 由来の活動",
+    });
+  });
+
+  it("通常の活動をそのまま配分する", () => {
+    expect(calculateAiActivityCredit(false)).toEqual({
+      type: "human",
+      creditRatio: 1,
+      label: "通常の活動",
     });
   });
 });

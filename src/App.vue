@@ -360,7 +360,7 @@ function resolveLocationRange(
 }
 
 function createInitialRangeSelection(): RangeSelection {
-  return { type: "relative", count: 7, unit: "day" };
+  return { type: "relative", count: 2, unit: "week" };
 }
 
 function rangesEqual(left: DateRange, right: DateRange): boolean {

@@ -104,11 +104,11 @@ function formatDate(value: string): string {
 function kindClass(kind: ContributionKind): string {
   switch (kind) {
     case "implementation":
-      return "bg-emerald-100 text-emerald-800";
+      return "bg-kind-implementation-soft text-kind-implementation-ink";
     case "review":
-      return "bg-blue-100 text-blue-800";
+      return "bg-kind-review-soft text-kind-review-ink";
     case "issue":
-      return "bg-amber-100 text-amber-900";
+      return "bg-kind-issue-soft text-kind-issue-ink";
   }
 }
 </script>

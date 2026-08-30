@@ -445,7 +445,7 @@ function describeError(error: unknown): string {
           >
             <button
               type="button"
-              class="rounded-xl border border-line bg-white px-3 py-2 text-xs font-semibold hover:border-accent hover:text-accent-dark"
+              class="rounded-xl border border-line bg-control px-3 py-2 text-xs font-semibold hover:border-accent hover:text-accent-dark"
               aria-controls="range-panel"
               :aria-expanded="rangePanelOpen"
               @click="rangePanelOpen ? closeRangePanel() : openRangePanel()"
@@ -458,7 +458,7 @@ function describeError(error: unknown): string {
               id="range-panel"
               role="dialog"
               aria-labelledby="range-panel-heading"
-              class="absolute right-0 mt-2 w-[min(22rem,calc(100vw-2.5rem))] rounded-2xl border border-line bg-surface p-5 shadow-[0_18px_60px_rgba(34,52,45,0.16)]"
+              class="absolute right-0 mt-2 w-[min(22rem,calc(100vw-2.5rem))] rounded-2xl border border-line bg-surface p-5 shadow-popover"
               @submit.prevent="applyRange"
             >
               <div class="flex items-start justify-between gap-4">
@@ -530,7 +530,7 @@ function describeError(error: unknown): string {
                   required
                   :min="readyState.dataset.range.start"
                   :max="readyState.dataset.range.end"
-                  class="min-w-0 rounded-xl border border-line bg-white px-3 py-2.5 text-sm"
+                  class="min-w-0 rounded-xl border border-line bg-control px-3 py-2.5 text-sm"
                 >
                 <span class="text-muted">—</span>
                 <input
@@ -539,7 +539,7 @@ function describeError(error: unknown): string {
                   required
                   :min="readyState.dataset.range.start"
                   :max="readyState.dataset.range.end"
-                  class="min-w-0 rounded-xl border border-line bg-white px-3 py-2.5 text-sm"
+                  class="min-w-0 rounded-xl border border-line bg-control px-3 py-2.5 text-sm"
                 >
               </div>
               <p class="mt-3 text-xs leading-5 text-muted">
@@ -553,7 +553,7 @@ function describeError(error: unknown): string {
               </p>
               <button
                 type="submit"
-                class="mt-4 w-full rounded-xl bg-accent px-5 py-3 text-sm font-semibold text-white hover:bg-accent-dark"
+                class="mt-4 w-full rounded-xl bg-accent px-5 py-3 text-sm font-semibold text-on-accent hover:bg-accent-dark"
               >
                 この期間を表示する
               </button>
@@ -580,7 +580,7 @@ function describeError(error: unknown): string {
       v-else-if="viewState.status === 'error'"
       class="mx-auto max-w-3xl px-5 py-24"
     >
-      <div class="rounded-2xl border border-danger/30 bg-red-50 p-6 text-danger">
+      <div class="rounded-2xl border border-danger/30 bg-danger-soft p-6 text-danger">
         <h1 class="font-display text-xl font-semibold">
           リーダーボードを表示できません
         </h1>

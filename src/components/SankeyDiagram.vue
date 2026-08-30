@@ -56,39 +56,41 @@ const highlightedPointsLabel = computed((): string => {
 
 function nodeFill(node: SankeyDiagramNode): string {
   if (node.selected && node.role !== "actor") {
-    return "#dff3e9";
+    return "var(--color-accent-soft)";
   }
   if (node.role === "pull") {
-    return "#f4f1e8";
+    return "var(--color-flow-pull)";
   }
   if (node.role === "issue") {
-    return "#fff5d6";
+    return "var(--color-flow-issue)";
   }
   if (node.role === "actor" && node.selected) {
-    return "#0d5a40";
+    return "var(--color-flow-selected-actor)";
   }
-  return "#e8eef1";
+  return "var(--color-flow-neutral)";
 }
 
 function nodeStroke(node: SankeyDiagramNode): string {
   if (node.selected) {
-    return "#16815d";
+    return "var(--color-flow-selected-border)";
   }
-  return "#b9c5c8";
+  return "var(--color-flow-border)";
 }
 
 function nodeTextFill(node: SankeyDiagramNode): string {
-  return node.role === "actor" && node.selected ? "#ffffff" : "#162521";
+  return node.role === "actor" && node.selected
+    ? "var(--color-flow-selected-actor-ink)"
+    : "var(--color-ink)";
 }
 
 function linkColor(link: SankeyDiagramLink): string {
   switch (link.kind) {
     case "implementation":
-      return "#16815d";
+      return "var(--color-flow-implementation)";
     case "review":
-      return "#2563eb";
+      return "var(--color-kind-review)";
     case "issue":
-      return "#d97706";
+      return "var(--color-kind-issue)";
   }
 }
 
@@ -102,11 +104,11 @@ function linkOpacity(selected: boolean): number {
 function legendClass(kind: ContributionKind): string {
   switch (kind) {
     case "implementation":
-      return "bg-emerald-600";
+      return "bg-kind-implementation";
     case "review":
-      return "bg-blue-600";
+      return "bg-kind-review";
     case "issue":
-      return "bg-amber-600";
+      return "bg-kind-issue";
     default:
       throw new UnreachableError(kind);
   }
@@ -128,11 +130,11 @@ function formatScore(score: number): string {
           {{ formatScore(layout.highlightedPoints) }} 点
         </dd>
       </div>
-      <div class="rounded-xl bg-slate-100 px-4 py-3">
-        <dt class="text-xs font-semibold text-slate-600">
+      <div class="rounded-xl bg-flow-stat-surface px-4 py-3">
+        <dt class="text-xs font-semibold text-flow-stat-ink">
           図内の人物への総配点
         </dt>
-        <dd class="mt-1 font-mono text-lg font-semibold text-slate-700">
+        <dd class="mt-1 font-mono text-lg font-semibold text-flow-stat-value">
           {{ formatScore(layout.totalAllocatedPoints) }} 点
         </dd>
       </div>
@@ -156,7 +158,7 @@ function formatScore(score: number): string {
       <span>選択対象に関係する経路は濃く表示</span>
     </div>
 
-    <div class="mt-4 overflow-x-auto overflow-y-hidden rounded-xl border border-line bg-white">
+    <div class="mt-4 overflow-x-auto overflow-y-hidden rounded-xl border border-line bg-flow-canvas">
       <svg
         class="block"
         :width="layout.width"

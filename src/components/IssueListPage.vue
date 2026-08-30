@@ -81,7 +81,7 @@ function formatDate(value: string): string {
               </span>
               <span
                 v-if="hasActivityInRange(issue)"
-                class="rounded-full bg-amber-100 px-2 py-0.5 text-[0.7rem] font-semibold text-amber-900"
+                class="rounded-full bg-kind-issue-soft px-2 py-0.5 text-[0.7rem] font-semibold text-kind-issue-ink"
               >
                 期間内に活動あり
               </span>

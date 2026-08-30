@@ -176,7 +176,7 @@ function evidenceLabel(kind: EvidenceKind): string {
         <span
           v-for="kind in issue.bodyEvidenceKinds"
           :key="kind"
-          class="rounded-full border border-line bg-white px-2.5 py-1 text-xs text-muted"
+          class="rounded-full border border-line bg-control px-2.5 py-1 text-xs text-muted"
         >
           {{ evidenceLabel(kind) }}
         </span>

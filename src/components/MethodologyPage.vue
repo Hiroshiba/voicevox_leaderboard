@@ -30,7 +30,7 @@ defineProps<{
           同じ主 Issue を参照するマージ済み PR は一つのワークストリームへまとめます。
           主 Issue がない PR と未マージ PR は単独のワークストリームとして扱います。
         </p>
-        <div class="mt-5 rounded-2xl bg-ink px-5 py-4 text-white">
+        <div class="mt-5 rounded-2xl bg-code-surface px-5 py-4 text-code-ink">
           <p class="overflow-x-auto font-mono text-sm leading-7 whitespace-nowrap">
             I = min { 15, 1 + 1.5 log₂(1 + E / 20) + 0.5 log₂(1 + F) + log₂ R + C }
           </p>
@@ -138,7 +138,7 @@ defineProps<{
         </h2>
         <div class="mt-5 grid gap-5 lg:grid-cols-3">
           <div>
-            <p class="font-semibold text-emerald-800">
+            <p class="font-semibold text-kind-implementation-ink">
               PR 作成 10% と実装 最大 55%
             </p>
             <p class="mt-2 text-sm leading-7 text-muted">
@@ -155,7 +155,7 @@ defineProps<{
             </p>
           </div>
           <div>
-            <p class="font-semibold text-blue-800">
+            <p class="font-semibold text-kind-review-ink">
               レビュー 20%
             </p>
             <p class="mt-2 text-sm leading-7 text-muted">
@@ -165,7 +165,7 @@ defineProps<{
             </p>
           </div>
           <div>
-            <p class="font-semibold text-amber-900">
+            <p class="font-semibold text-kind-issue-ink">
               Issue・調査 15%
             </p>
             <p class="mt-2 text-sm leading-7 text-muted">
@@ -176,14 +176,14 @@ defineProps<{
             </p>
           </div>
         </div>
-        <div class="mt-5 rounded-2xl bg-ink px-5 py-4 text-white">
+        <div class="mt-5 rounded-2xl bg-code-surface px-5 py-4 text-code-ink">
           <p class="overflow-x-auto font-mono text-sm leading-7 whitespace-nowrap">
             PR 作成配分枠 = 0.10 I × G
           </p>
           <p class="mt-1 overflow-x-auto font-mono text-sm leading-7 whitespace-nowrap">
             実装配分枠 = 0.55 I × A × G × T
           </p>
-          <p class="mt-1 text-sm leading-6 text-white/70">
+          <p class="mt-1 text-sm leading-6 text-code-ink/70">
             A は独立した品質確認があれば 1、なければマージ済みは 0.5、未マージは 0 です。
             G は AI 由来の活動なら 0.3、それ以外は 1 です。
             T はマージ済みなら 1、オープンなら 0.5、クローズ済みなら 0.25 です。
@@ -251,7 +251,7 @@ defineProps<{
           関連するマージ済み PR がない Issue は、状態、証拠要素、実質的コメント、参加者から独立 Issue スコアを求めます。
           invalid と spam の Issue は除外します。
         </p>
-        <div class="mt-5 rounded-2xl bg-ink px-5 py-4 text-white">
+        <div class="mt-5 rounded-2xl bg-code-surface px-5 py-4 text-code-ink">
           <p class="overflow-x-auto font-mono text-sm leading-7 whitespace-nowrap">
             S = min { 8, B + 0.5 min { K, 4 } + min { 3, log₂(1 + Q) } + min { 1.5, 0.75 log₂(1 + P) } }
           </p>

@@ -57,7 +57,7 @@ function formatScore(score: number): string {
 
     <div
       v-else
-      class="overflow-x-auto rounded-2xl border border-line bg-surface shadow-[0_8px_24px_rgba(34,52,45,0.04)]"
+      class="overflow-x-auto rounded-2xl border border-line bg-surface shadow-table"
     >
       <table class="w-full min-w-[44rem] border-collapse text-left">
         <thead class="border-b border-line bg-paper/55 text-xs text-muted">

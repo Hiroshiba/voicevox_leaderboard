@@ -101,13 +101,13 @@ function pointsForKind(kind: ContributionKind): number {
 function segmentClass(kind: BreakdownKind): string {
   switch (kind) {
     case "implementation":
-      return "bg-emerald-600";
+      return "bg-kind-implementation";
     case "review":
-      return "bg-blue-600";
+      return "bg-kind-review";
     case "issue":
-      return "bg-amber-600";
+      return "bg-kind-issue";
     case "unallocated":
-      return "bg-rose-500";
+      return "bg-kind-unallocated";
     default:
       throw new UnreachableError(kind);
   }

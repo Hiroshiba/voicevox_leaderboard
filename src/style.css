@@ -11,6 +11,27 @@
   --color-accent-soft: #dff3e9;
   --color-highlight: #ecb548;
   --color-danger: #b33a3a;
+  --color-danger-soft: #fef2f2;
+  --color-control: #ffffff;
+  --color-on-accent: #ffffff;
+  --color-code-surface: #162521;
+  --color-code-ink: #ffffff;
+  --color-kind-implementation: #059669;
+  --color-kind-implementation-soft: #d1fae5;
+  --color-kind-implementation-ink: #065f46;
+  --color-kind-review: #2563eb;
+  --color-kind-review-soft: #dbeafe;
+  --color-kind-review-ink: #1e40af;
+  --color-kind-issue: #d97706;
+  --color-kind-issue-soft: #fef3c7;
+  --color-kind-issue-ink: #78350f;
+  --color-kind-unallocated: #f43f5e;
+  --color-flow-canvas: #ffffff;
+  --color-flow-stat-surface: #f1f5f9;
+  --color-flow-stat-ink: #475569;
+  --color-flow-stat-value: #334155;
+  --shadow-popover: 0 18px 60px rgb(34 52 45 / 16%);
+  --shadow-table: 0 8px 24px rgb(34 52 45 / 4%);
   --font-sans:
     "BIZ UDPGothic", "Noto Sans JP", "Yu Gothic UI", "Yu Gothic",
     sans-serif;
@@ -19,11 +40,64 @@
 }
 
 :root {
+  color-scheme: light dark;
   color: var(--color-ink);
   background: var(--color-paper);
   font-family: var(--font-sans);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
+  --color-flow-implementation: #16815d;
+  --color-flow-pull: #f4f1e8;
+  --color-flow-issue: #fff5d6;
+  --color-flow-neutral: #e8eef1;
+  --color-flow-border: #b9c5c8;
+  --color-flow-selected-border: #16815d;
+  --color-flow-selected-actor: #0d5a40;
+  --color-flow-selected-actor-ink: #ffffff;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-paper: #111a17;
+    --color-surface: #1a2722;
+    --color-ink: #edf5f1;
+    --color-muted: #a5b7ae;
+    --color-line: #3b4e46;
+    --color-accent: #55d6a4;
+    --color-accent-dark: #91e8c3;
+    --color-accent-soft: #1d4c3c;
+    --color-highlight: #f3c965;
+    --color-danger: #ff9797;
+    --color-danger-soft: #57262a;
+    --color-control: #22332c;
+    --color-on-accent: #10271f;
+    --color-code-surface: #0a100e;
+    --color-code-ink: #f1faf6;
+    --color-kind-implementation: #34d399;
+    --color-kind-implementation-soft: #14532d;
+    --color-kind-implementation-ink: #a7f3d0;
+    --color-kind-review: #60a5fa;
+    --color-kind-review-soft: #172554;
+    --color-kind-review-ink: #bfdbfe;
+    --color-kind-issue: #fbbf24;
+    --color-kind-issue-soft: #451a03;
+    --color-kind-issue-ink: #fde68a;
+    --color-kind-unallocated: #fb7185;
+    --color-flow-canvas: #18231f;
+    --color-flow-implementation: #55d6a4;
+    --color-flow-pull: #24342e;
+    --color-flow-issue: #4d3b16;
+    --color-flow-neutral: #2e3d43;
+    --color-flow-border: #76918a;
+    --color-flow-selected-border: #55d6a4;
+    --color-flow-selected-actor: #4bcf9a;
+    --color-flow-selected-actor-ink: #0b1e17;
+    --color-flow-stat-surface: #21302b;
+    --color-flow-stat-ink: #b5c7bf;
+    --color-flow-stat-value: #edf5f1;
+    --shadow-popover: 0 18px 60px rgb(0 0 0 / 45%);
+    --shadow-table: 0 8px 24px rgb(0 0 0 / 28%);
+  }
 }
 
 body {

@@ -1,15 +1,18 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { UnreachableError } from "../domain/errors.ts";
+import { assertNonNullable, UnreachableError } from "../domain/errors.ts";
 import type {
   ContributionKind,
   DateRange,
+  FileScore,
   LeaderboardResult,
   PreparedPull,
+  UnmeasuredReason,
   WorkstreamScore,
 } from "../domain/model.ts";
 import {
   calculateAiActivityCredit,
+  calculateEditMeasurementSummary,
   calculateImplementationReviewAssurance,
   calculateImplementationStateCredit,
   contributionKindLabel,
@@ -69,6 +72,22 @@ const implementationCreditPercent = computed(() =>
       100,
   ),
 );
+const pullEditSummary = computed(() =>
+  calculateEditMeasurementSummary(props.pull.files),
+);
+const workstreamPullContribution = computed(() => {
+  if (props.workstream == null) {
+    return undefined;
+  }
+  const contribution = props.workstream.pullEditContributions.find(
+    (candidate) => candidate.pullKey === props.pull.key,
+  );
+  assertNonNullable(
+    contribution,
+    props.pull.key + " のワークストリーム編集寄与量がありません。",
+  );
+  return contribution.amount;
+});
 
 const outcomeDateLabel = computed(() => {
   const outcome = pullAtRangeEnd.value.outcome;
@@ -88,10 +107,56 @@ function formatScore(score: number): string {
   return score.toFixed(2);
 }
 
-function formatLines(lines: number): string {
+function formatAmount(amount: number): string {
   return new Intl.NumberFormat("ja-JP", {
     maximumFractionDigits: 1,
-  }).format(lines);
+  }).format(amount);
+}
+
+function fileAnalysisLabel(file: FileScore): string {
+  switch (file.analysis.kind) {
+    case "measured":
+      return "測定済み " + file.analysis.groups.length + " グループ";
+    case "generated":
+      return "生成物";
+    case "unmeasured":
+      return "未測定 " + unmeasuredReasonLabel(file.analysis.reason);
+    default:
+      throw new UnreachableError(file.analysis);
+  }
+}
+
+function unmeasuredReasonsLabel(
+  reasons: Record<UnmeasuredReason, number>,
+): string {
+  const labels: string[] = [];
+  for (const reason of [
+    "patchMissing",
+    "patchTruncated",
+    "binary",
+    "unsupported",
+  ] satisfies UnmeasuredReason[]) {
+    const count = reasons[reason];
+    if (count > 0) {
+      labels.push(unmeasuredReasonLabel(reason) + " " + count + " 件");
+    }
+  }
+  return labels.join("、");
+}
+
+function unmeasuredReasonLabel(reason: UnmeasuredReason): string {
+  switch (reason) {
+    case "patchMissing":
+      return "patch なし";
+    case "patchTruncated":
+      return "patch 不完全";
+    case "binary":
+      return "バイナリ";
+    case "unsupported":
+      return "未対応形式";
+    default:
+      throw new UnreachableError(reason);
+  }
 }
 
 function formatDate(value: string): string {
@@ -158,26 +223,26 @@ function kindClass(kind: ContributionKind): string {
       <dl class="mt-7 grid grid-cols-2 gap-4 sm:grid-cols-4">
         <div class="rounded-xl bg-paper/70 p-4">
           <dt class="text-xs text-muted">
-            有効変更行 E
+            通常編集量
           </dt>
           <dd class="mt-1 font-mono text-lg">
-            {{ formatLines(pull.effectiveLines) }}
+            {{ formatAmount(pullEditSummary.uncompressedEditAmount) }}
           </dd>
         </div>
         <div class="rounded-xl bg-paper/70 p-4">
           <dt class="text-xs text-muted">
-            非生成ファイル F
+            PR 内の圧縮後編集量
           </dt>
           <dd class="mt-1 font-mono text-lg">
-            {{ pull.nonGeneratedFiles }}
+            {{ formatAmount(pullEditSummary.editAmount) }}
           </dd>
         </div>
         <div class="rounded-xl bg-paper/70 p-4">
           <dt class="text-xs text-muted">
-            実装質量 M
+            生成物
           </dt>
           <dd class="mt-1 font-mono text-lg">
-            {{ formatScore(pull.mass) }}
+            {{ pullEditSummary.generatedFileCount }} 件
           </dd>
         </div>
         <div class="rounded-xl bg-paper/70 p-4">
@@ -195,6 +260,17 @@ function kindClass(kind: ContributionKind): string {
         <p>
           <span class="font-semibold text-ink">活動区分</span>
           {{ activityCredit.label }}
+        </p>
+        <p>
+          <span class="font-semibold text-ink">未測定</span>
+          {{ pullEditSummary.unmeasuredFileCount }} 件
+          <span v-if="pullEditSummary.unmeasuredFileCount > 0">
+            {{ unmeasuredReasonsLabel(pullEditSummary.unmeasuredReasons) }}
+          </span>
+        </p>
+        <p v-if="workstreamPullContribution != null">
+          <span class="font-semibold text-ink">ワークストリーム配分寄与量</span>
+          {{ formatAmount(workstreamPullContribution) }}
         </p>
         <p>
           <span class="font-semibold text-ink">状態係数</span>
@@ -311,6 +387,28 @@ function kindClass(kind: ContributionKind): string {
         />
       </div>
 
+      <div class="mt-6 rounded-xl bg-paper/70 p-4 text-sm leading-6 text-muted">
+        <p>
+          <span class="font-semibold text-ink">通常編集量</span>
+          {{ formatAmount(workstream.uncompressedEditAmount) }}
+        </p>
+        <p>
+          <span class="font-semibold text-ink">圧縮後編集量 U</span>
+          {{ formatAmount(workstream.editAmount) }}
+        </p>
+        <p>
+          <span class="font-semibold text-ink">生成物寄与 G</span>
+          {{ formatAmount(workstream.generatedContribution) }}、{{ workstream.generatedFileCount }} 件
+        </p>
+        <p>
+          <span class="font-semibold text-ink">未測定</span>
+          {{ workstream.unmeasuredFileCount }} 件
+          <span v-if="workstream.unmeasuredFileCount > 0">
+            {{ unmeasuredReasonsLabel(workstream.unmeasuredReasons) }}
+          </span>
+        </p>
+      </div>
+
       <h3 class="mt-7 font-semibold">
         この期間の配点
       </h3>
@@ -363,7 +461,7 @@ function kindClass(kind: ContributionKind): string {
                 削除
               </th>
               <th class="px-3 py-2 text-right font-semibold">
-                有効行
+                分析
               </th>
             </tr>
           </thead>
@@ -375,10 +473,6 @@ function kindClass(kind: ContributionKind): string {
             >
               <td class="px-3 py-2 font-mono text-xs">
                 {{ file.filename }}
-                <span
-                  v-if="file.generated"
-                  class="ml-2 text-muted"
-                >生成物扱い</span>
               </td>
               <td class="px-3 py-2 text-right font-mono text-xs">
                 +{{ file.additions }}
@@ -387,7 +481,7 @@ function kindClass(kind: ContributionKind): string {
                 -{{ file.deletions }}
               </td>
               <td class="px-3 py-2 text-right font-mono text-xs">
-                {{ formatLines(file.effectiveLines) }}
+                {{ fileAnalysisLabel(file) }}
               </td>
             </tr>
           </tbody>

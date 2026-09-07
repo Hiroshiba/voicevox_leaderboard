@@ -56,11 +56,83 @@ describe("parseLeaderboardDataset", () => {
   ])("%s PR の outcome を拒否する", (_label, outcome) => {
     expect(() => parseLeaderboardDataset(datasetWithOutcome(outcome))).toThrow();
   });
+
+  it("測定済み、生成物、未測定のファイル分析を受け付ける", () => {
+    const dataset = datasetWithOutcome({ kind: "open" });
+    const pull = dataset.pulls[0];
+    if (pull == null) {
+      throw new Error("検証対象の PR がありません。");
+    }
+    pull.files = [
+      {
+        filename: "src/index.ts",
+        additions: 1,
+        deletions: 0,
+        analysis: {
+          kind: "measured",
+          groups: [
+            {
+              fingerprint: "a".repeat(64),
+              beforeTokens: 1,
+              afterTokens: 2,
+              occurrences: 1,
+              weight: 1,
+            },
+          ],
+        },
+      },
+      {
+        filename: "dist/index.js",
+        additions: 1,
+        deletions: 0,
+        analysis: { kind: "generated" },
+      },
+      {
+        filename: "image.png",
+        additions: 1,
+        deletions: 0,
+        analysis: { kind: "unmeasured", reason: "binary" },
+      },
+    ];
+
+    expect(parseLeaderboardDataset(dataset).pulls[0]?.files).toHaveLength(3);
+  });
+
+  it("編集グループの fingerprint は SHA256 形式だけを受け付ける", () => {
+    const dataset = datasetWithOutcome({ kind: "open" });
+    const pull = dataset.pulls[0];
+    if (pull == null) {
+      throw new Error("検証対象の PR がありません。");
+    }
+    pull.files = [
+      {
+        filename: "src/index.ts",
+        additions: 1,
+        deletions: 0,
+        analysis: {
+          kind: "measured",
+          groups: [
+            {
+              fingerprint: "not-a-digest",
+              beforeTokens: 1,
+              afterTokens: 2,
+              occurrences: 1,
+              weight: 1,
+            },
+          ],
+        },
+      },
+    ];
+
+    expect(() => parseLeaderboardDataset(dataset)).toThrow();
+  });
 });
 
-function datasetWithOutcome(outcome: unknown): unknown {
+function datasetWithOutcome(
+  outcome: unknown,
+): { pulls: Array<Record<string, unknown>> } & Record<string, unknown> {
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     organization: "VOICEVOX",
     generatedAt: "2026-08-01T00:00:00Z",
     range: {
@@ -81,9 +153,6 @@ function datasetWithOutcome(outcome: unknown): unknown {
         authorIsHuman: true,
         coauthors: [],
         files: [],
-        effectiveLines: 0,
-        nonGeneratedFiles: 0,
-        mass: 1,
         conventionalBonus: 0,
         fullAiImplementation: false,
         reviews: [],

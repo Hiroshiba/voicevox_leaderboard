@@ -1,10 +1,13 @@
 import { UnreachableError } from "./errors.ts";
 import type {
   ContributionKind,
+  EditGroup,
   FileScore,
+  PullEditContribution,
   PreparedPull,
   PullOutcome,
   ScoreAllocation,
+  UnmeasuredReason,
   WorkstreamScore,
 } from "./model.ts";
 
@@ -14,17 +17,19 @@ export const contributionKinds = [
   "issue",
 ] satisfies ContributionKind[];
 
-export interface FileChange {
-  filename: string;
-  additions: number;
-  deletions: number;
-}
-
 export interface ImportanceInput {
-  effectiveLines: number;
-  nonGeneratedFiles: number;
+  editAmount: number;
+  generatedContribution: number;
   repositoryCount: number;
   conventionalBonus: number;
+}
+
+export interface EditMeasurementSummary {
+  uncompressedEditAmount: number;
+  editAmount: number;
+  generatedFileCount: number;
+  unmeasuredFileCount: number;
+  unmeasuredReasons: Record<UnmeasuredReason, number>;
 }
 
 type ImplementationReviewAssurance =
@@ -78,46 +83,145 @@ type AiActivityCredit =
       label: string;
     };
 
-const generatedPathPatterns = [
-  /(?:^|\/)(?:vendor|vendors|third_party|node_modules|dist|generated)(?:\/|$)/i,
-  /(?:^|\/)(?:__snapshots__|snapshots?)(?:\/|$)/i,
-  /(?:^|\/)(?:pnpm-lock\.yaml|package-lock\.json|yarn\.lock|bun\.lockb?|uv\.lock|Cargo\.lock)$/i,
-  /(?:^|\/)[^/]+\.lock$/i,
-  /(?:\.generated\.|\.snap$|\.snapshot$|\.min\.(?:js|css)$|\.map$)/i,
-];
+/** 編集グループの反復を圧縮した編集量を計算する。 */
+export function calculateEditGroupAmount(group: EditGroup): number {
+  assertEditGroupValues(group);
+  const tokenAmount = Math.max(
+    1,
+    Math.max(group.beforeTokens, group.afterTokens) / 8,
+  );
+  return (
+    group.weight *
+    tokenAmount *
+    (1 + 0.25 * Math.log2(group.occurrences))
+  );
+}
 
-const documentationPathPattern =
-  /(?:\.mdx?|\.rst|\.adoc|\.asciidoc|\.txt)$/i;
+/** 編集グループの反復を圧縮しない編集量を計算する。 */
+export function calculateUncompressedEditGroupAmount(
+  group: EditGroup,
+): number {
+  assertEditGroupValues(group);
+  const tokenAmount = Math.max(
+    1,
+    Math.max(group.beforeTokens, group.afterTokens) / 8,
+  );
+  return group.weight * tokenAmount * group.occurrences;
+}
 
-/** ファイル変更から有効変更行数を計算する。 */
-export function calculateFileScore(
-  change: FileChange,
-  fullAiImplementation: boolean,
-): FileScore {
-  const generated =
-    fullAiImplementation ||
-    generatedPathPatterns.some((pattern) => pattern.test(change.filename));
-  const documentation = documentationPathPattern.test(change.filename);
-  const factor = generated ? 0.05 : documentation ? 0.5 : 1;
-  const changedLines = Math.min(200, change.additions + change.deletions);
+/** PR ごとの編集寄与量比率を計算する。 */
+export function calculatePullEditContributionRatios(
+  contributions: PullEditContribution[],
+): Map<string, number> {
+  if (contributions.length === 0) {
+    throw new Error("ワークストリームの PR 編集寄与量がありません。");
+  }
+  const contributionByPull = new Map<string, number>();
+  for (const contribution of contributions) {
+    if (
+      contributionByPull.has(contribution.pullKey) ||
+      Number.isFinite(contribution.amount) === false ||
+      contribution.amount < 0
+    ) {
+      throw new Error(
+        contribution.pullKey + " の PR 編集寄与量が不正です。",
+      );
+    }
+    contributionByPull.set(contribution.pullKey, contribution.amount);
+  }
+  const totalAmount = [...contributionByPull.values()].reduce(
+    (total, amount) => total + amount,
+    0,
+  );
+  if (Number.isFinite(totalAmount) === false) {
+    throw new Error("ワークストリームの PR 編集寄与量合計が不正です。");
+  }
+  const equalRatio = 1 / contributionByPull.size;
+  return new Map(
+    [...contributionByPull.entries()].map(([pullKey, amount]) => [
+      pullKey,
+      totalAmount === 0 ? equalRatio : amount / totalAmount,
+    ]),
+  );
+}
 
+function assertEditGroupValues(group: EditGroup): void {
+  if (
+    Number.isInteger(group.beforeTokens) === false ||
+    group.beforeTokens < 0 ||
+    Number.isInteger(group.afterTokens) === false ||
+    group.afterTokens < 0 ||
+    Number.isInteger(group.occurrences) === false ||
+    group.occurrences <= 0
+  ) {
+    throw new Error("編集グループのトークン数または出現回数が不正です。");
+  }
+}
+
+/** ファイル群の編集量、生成物、未測定件数を集計する。 */
+export function calculateEditMeasurementSummary(
+  files: FileScore[],
+): EditMeasurementSummary {
+  const groups = new Map<string, EditGroup>();
+  const unmeasuredReasons = createUnmeasuredReasonCounts();
+  let uncompressedEditAmount = 0;
+  let generatedFileCount = 0;
+  let unmeasuredFileCount = 0;
+  for (const file of files) {
+    switch (file.analysis.kind) {
+      case "measured":
+        for (const group of file.analysis.groups) {
+          uncompressedEditAmount += calculateUncompressedEditGroupAmount(group);
+          const current = groups.get(group.fingerprint);
+          if (current == null) {
+            groups.set(group.fingerprint, group);
+            continue;
+          }
+          if (
+            current.beforeTokens !== group.beforeTokens ||
+            current.afterTokens !== group.afterTokens ||
+            current.weight !== group.weight
+          ) {
+            throw new Error(
+              "編集グループ " + group.fingerprint + " の属性が一致しません。",
+            );
+          }
+          groups.set(group.fingerprint, {
+            ...current,
+            occurrences: current.occurrences + group.occurrences,
+          });
+        }
+        break;
+      case "generated":
+        generatedFileCount += 1;
+        break;
+      case "unmeasured":
+        unmeasuredFileCount += 1;
+        unmeasuredReasons[file.analysis.reason] += 1;
+        break;
+      default:
+        throw new UnreachableError(file.analysis);
+    }
+  }
   return {
-    ...change,
-    effectiveLines: changedLines * factor,
-    generated,
+    uncompressedEditAmount,
+    editAmount: [...groups.values()].reduce(
+      (total, group) => total + calculateEditGroupAmount(group),
+      0,
+    ),
+    generatedFileCount,
+    unmeasuredFileCount,
+    unmeasuredReasons,
   };
 }
 
-/** PR の実装枠を分けるための質量を計算する。 */
-export function calculatePullMass(
-  effectiveLines: number,
-  nonGeneratedFiles: number,
-): number {
-  return (
-    1 +
-    Math.log2(1 + effectiveLines / 20) +
-    0.5 * Math.log2(1 + nonGeneratedFiles)
-  );
+function createUnmeasuredReasonCounts(): Record<UnmeasuredReason, number> {
+  return {
+    patchMissing: 0,
+    patchTruncated: 0,
+    binary: 0,
+    unsupported: 0,
+  };
 }
 
 /** ワークストリームの重要度を計算する。 */
@@ -125,8 +229,9 @@ export function calculateImportance(input: ImportanceInput): number {
   return Math.min(
     15,
     1 +
-      1.5 * Math.log2(1 + input.effectiveLines / 20) +
-      0.5 * Math.log2(1 + input.nonGeneratedFiles) +
+      1.5 * Math.log2(
+        1 + (input.editAmount + input.generatedContribution) / 10,
+      ) +
       Math.log2(input.repositoryCount) +
       input.conventionalBonus,
   );

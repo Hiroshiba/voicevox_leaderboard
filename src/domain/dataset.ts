@@ -18,12 +18,38 @@ const evidenceKindSchema = z.enum([
   "measurement",
 ]);
 
+const editGroupSchema = z.object({
+  fingerprint: z.string().regex(/^[0-9a-f]{64}$/),
+  beforeTokens: z.number().int().nonnegative(),
+  afterTokens: z.number().int().nonnegative(),
+  occurrences: z.number().int().positive(),
+  weight: z.union([z.literal(0.5), z.literal(1)]),
+});
+
 const fileScoreSchema = z.object({
   filename: z.string().min(1),
   additions: z.number().int().nonnegative(),
   deletions: z.number().int().nonnegative(),
-  effectiveLines: z.number().nonnegative(),
-  generated: z.boolean(),
+  previousFilename: z.string().min(1).optional(),
+  sha: z.string().min(1).optional(),
+  analysis: z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("measured"),
+      groups: z.array(editGroupSchema),
+    }),
+    z.object({
+      kind: z.literal("generated"),
+    }),
+    z.object({
+      kind: z.literal("unmeasured"),
+      reason: z.enum([
+        "patchMissing",
+        "patchTruncated",
+        "binary",
+        "unsupported",
+      ]),
+    }),
+  ]),
 });
 
 const preparedPullSchema = z.object({
@@ -54,9 +80,6 @@ const preparedPullSchema = z.object({
   authorIsHuman: z.boolean(),
   coauthors: z.array(actorSchema),
   files: z.array(fileScoreSchema),
-  effectiveLines: z.number().nonnegative(),
-  nonGeneratedFiles: z.number().int().nonnegative(),
-  mass: z.number().positive(),
   conventionalBonus: z.number().nonnegative(),
   fullAiImplementation: z.boolean(),
   reviews: z.array(
@@ -102,7 +125,7 @@ const preparedIssueSchema = z.object({
 });
 
 export const leaderboardDatasetSchema = z.object({
-  schemaVersion: z.literal(4),
+  schemaVersion: z.literal(5),
   organization: z.literal("VOICEVOX"),
   generatedAt: dateTimeSchema,
   range: z.object({

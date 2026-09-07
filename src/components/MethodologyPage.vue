@@ -32,24 +32,24 @@ defineProps<{
         </p>
         <div class="mt-5 rounded-2xl bg-code-surface px-5 py-4 text-code-ink">
           <p class="overflow-x-auto font-mono text-sm leading-7 whitespace-nowrap">
-            I = min { 15, 1 + 1.5 log₂(1 + E / 20) + 0.5 log₂(1 + F) + log₂ R + C }
+            I = min { 15, 1 + 1.5 log₂(1 + (U + G) / 10) + log₂ R + C }
           </p>
         </div>
         <dl class="mt-5 grid gap-4 text-sm sm:grid-cols-2">
           <div class="rounded-xl bg-paper/70 p-4">
             <dt class="font-semibold">
-              E 有効変更行
+              U 反復圧縮後編集量
             </dt>
             <dd class="mt-2 leading-6 text-muted">
-              1 ファイル 200 行を上限に、通常ファイルを 1 倍、文章を 0.5 倍、生成物、lockfile、snapshot、vendor を 0.05 倍で数えます。
+              字句差分を同じ編集グループへまとめ、ワークストリーム全体の出現回数 n に対して、重み w と変更前後のトークン数から w × max(1, max(beforeTokenCount, afterTokenCount) / 8) × (1 + 0.25 log₂ n) で数えます。通常のコード、テスト、設定、CI は w = 1、文書は w = 0.5 です。
             </dd>
           </div>
           <div class="rounded-xl bg-paper/70 p-4">
             <dt class="font-semibold">
-              F 非生成ファイル数
+              G 生成物寄与
             </dt>
             <dd class="mt-2 leading-6 text-muted">
-              生成物として扱わなかった変更ファイルの合計です。
+              生成物を含むワークストリームは 1 とし、生成物を持つ PR の間で均等に配分します。未測定の変更量は推定しません。
             </dd>
           </div>
           <div class="rounded-xl bg-paper/70 p-4">
@@ -71,8 +71,10 @@ defineProps<{
           </div>
         </dl>
         <p class="mt-5 text-sm leading-7 text-muted">
-          PR ごとの実装質量は M = 1 + log₂(1 + E / 20) + 0.5 log₂(1 + F) です。
-          複数 PR の実装枠と Issue 枠を分ける比率に使います。
+          PR 作成、実装、関連 Issue 入力は、ワークストリーム全体で集計した編集寄与量を各 PR の出現回数比で分けた比率を使います。総量が 0 の場合だけ PR へ均等に配分します。
+        </p>
+        <p class="mt-3 text-sm leading-7 text-muted">
+          字句差分からの編集量は近似値で、係数は暫定です。未測定の変更を含む点数は、全変更を測定した結果ではありません。
         </p>
       </section>
 
@@ -146,7 +148,7 @@ defineProps<{
               共同作者へは分配せず、レビュー保証と PR の状態は掛けません。
               AI 由来の活動には 0.3 倍の係数を掛けます。
               作成日が期間外または作者が Bot の場合は作成枠を配点対象外とします。
-              実装枠は PR の実装質量に比例して分けます。
+              実装枠はワークストリーム全体の編集寄与量から求めた PR ごとの比率で分けます。
               共同作者がいなければ作者へ全量を配点し、共同作者がいる場合は作者へ 70%、共同作者全体へ 30%を配点します。
               マージまでに作者以外の人間による承認、実質レビュー、マージのいずれかがあれば、実装枠を全量配分します。
               独立した品質確認がないマージ済み PR は、実装枠の 50%だけを配分します。
@@ -178,14 +180,14 @@ defineProps<{
         </div>
         <div class="mt-5 rounded-2xl bg-code-surface px-5 py-4 text-code-ink">
           <p class="overflow-x-auto font-mono text-sm leading-7 whitespace-nowrap">
-            PR 作成配分枠 = 0.10 I × G
+            PR 作成配分枠 = 0.10 I × Q
           </p>
           <p class="mt-1 overflow-x-auto font-mono text-sm leading-7 whitespace-nowrap">
-            実装配分枠 = 0.55 I × A × G × T
+            実装配分枠 = 0.55 I × A × Q × T
           </p>
           <p class="mt-1 text-sm leading-6 text-code-ink/70">
             A は独立した品質確認があれば 1、なければマージ済みは 0.5、未マージは 0 です。
-            G は AI 由来の活動なら 0.3、それ以外は 1 です。
+            Q は AI 由来の活動なら 0.3、それ以外は 1 です。
             T はマージ済みなら 1、オープンなら 0.5、クローズ済みなら 0.25 です。
           </p>
         </div>
@@ -211,8 +213,8 @@ defineProps<{
         <p class="mt-3 text-sm leading-7 text-muted">
           AI へ実装させる前提で運用しているリポジトリは、設定ファイルで指定します。
           指定したリポジトリの PR は、変更ファイルをすべて生成物として数えます。
-          有効変更行 E は 0.05 倍になり、非生成ファイル数 F は 0 になります。
-          AI が書いた行数は人間の作業量を表さないためです。
+          生成物寄与 G はワークストリームごとに 1 とし、対象 PR の間で均等に配分します。
+          AI が書いた編集量は人間の作業量を表さないため、編集量 U には加えません。
         </p>
         <p class="mt-3 text-sm leading-7 text-muted">
           PR 作成、実装、レビュー、関連 Issue の活動は 30%だけを配分し、残りは配点対象外とします。

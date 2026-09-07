@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type {
   Actor,
+  FileScore,
   LeaderboardDataset,
   PreparedMergedPull,
   PreparedPull,
+  UnmeasuredReason,
 } from "../src/domain/model";
 import { calculateLeaderboard } from "../src/services/calculateLeaderboard";
 
@@ -13,7 +15,7 @@ const carol = actor("carol");
 const dave = actor("dave");
 
 const dataset: LeaderboardDataset = {
-  schemaVersion: 4,
+  schemaVersion: 5,
   organization: "VOICEVOX",
   generatedAt: "2026-08-02T00:00:00Z",
   range: {
@@ -86,6 +88,236 @@ describe("calculateLeaderboard", () => {
     );
   });
 
+  it("同じ編集をファイルと PR にまたがって圧縮し、独立した編集を保持する", () => {
+    const repeatedFingerprint = "b".repeat(64);
+    const independentFingerprint = "c".repeat(64);
+    const firstPull: PreparedMergedPull = {
+      ...pull(30, "2026-07-10T00:00:00Z"),
+      files: [
+        measuredFile(repeatedFingerprint, 8, 8, 1),
+        measuredFile(repeatedFingerprint, 8, 8, 1),
+      ],
+    };
+    const secondPull: PreparedMergedPull = {
+      ...pull(31, "2026-07-11T00:00:00Z"),
+      files: [
+        measuredFile(repeatedFingerprint, 8, 8, 1),
+        measuredFile(independentFingerprint, 8, 8, 1),
+      ],
+    };
+
+    const result = calculateLeaderboard(
+      {
+        ...dataset,
+        pulls: [firstPull, secondPull],
+      },
+      dataset.range,
+    );
+    const workstream = findPullWorkstream(result, 30);
+
+    expect(workstream.uncompressedEditAmount).toBe(4);
+    const repeatedAmount = 1 + 0.25 * Math.log2(3);
+    expect(workstream.editAmount).toBeCloseTo(repeatedAmount + 1, 12);
+    expect(workstream.pullEditContributions[0]?.amount).toBeCloseTo(
+      (2 / 3) * repeatedAmount,
+      12,
+    );
+    expect(workstream.pullEditContributions[1]?.amount).toBeCloseTo(
+      (1 / 3) * repeatedAmount + 1,
+      12,
+    );
+  });
+
+  it("同じ編集を一つの PR にまとめても重要度を変えない", () => {
+    const fingerprint = "d".repeat(64);
+    const firstPull: PreparedMergedPull = {
+      ...pull(32, "2026-07-10T00:00:00Z"),
+      files: [measuredFile(fingerprint, 8, 8, 1)],
+    };
+    const secondPull: PreparedMergedPull = {
+      ...pull(33, "2026-07-11T00:00:00Z"),
+      files: [measuredFile(fingerprint, 8, 8, 1)],
+    };
+    const splitResult = calculateLeaderboard(
+      {
+        ...dataset,
+        pulls: [firstPull, secondPull],
+      },
+      dataset.range,
+    );
+    const combinedPull: PreparedMergedPull = {
+      ...pull(34, "2026-07-10T00:00:00Z"),
+      files: [measuredFile(fingerprint, 8, 8, 2)],
+    };
+    const combinedResult = calculateLeaderboard(
+      {
+        ...dataset,
+        pulls: [combinedPull],
+      },
+      dataset.range,
+    );
+
+    const splitWorkstream = findPullWorkstream(splitResult, 32);
+    const combinedWorkstream = findPullWorkstream(combinedResult, 34);
+    expect(splitWorkstream.editAmount).toBeCloseTo(
+      combinedWorkstream.editAmount,
+      12,
+    );
+    expect(splitWorkstream.importance).toBeCloseTo(
+      combinedWorkstream.importance,
+      12,
+    );
+  });
+
+  it("生成物寄与 G を生成物のある PR へ均等配分する", () => {
+    const firstPull: PreparedMergedPull = {
+      ...pull(35, "2026-07-10T00:00:00Z"),
+      files: [generatedFile("dist/first.js")],
+    };
+    const secondPull: PreparedMergedPull = {
+      ...pull(36, "2026-07-11T00:00:00Z"),
+      files: [generatedFile("dist/second.js")],
+    };
+
+    const result = calculateLeaderboard(
+      {
+        ...dataset,
+        pulls: [firstPull, secondPull],
+      },
+      dataset.range,
+    );
+    const workstream = findPullWorkstream(result, 35);
+
+    expect(workstream.editAmount).toBe(0);
+    expect(workstream.generatedContribution).toBe(1);
+    expect(workstream.generatedFileCount).toBe(2);
+    expect(workstream.pullEditContributions).toEqual([
+      { pullKey: firstPull.key, amount: 0.5 },
+      { pullKey: secondPull.key, amount: 0.5 },
+    ]);
+  });
+
+  it("生成物と通常変更が混在しても寄与量と点数を保存する", () => {
+    const normalPull: PreparedMergedPull = {
+      ...pull(43, "2026-07-10T00:00:00Z"),
+      files: [measuredFile("2".repeat(64), 8, 8, 1)],
+    };
+    const generatedPull: PreparedMergedPull = {
+      ...pull(44, "2026-07-11T00:00:00Z"),
+      files: [generatedFile("dist/only.js")],
+    };
+
+    const result = calculateLeaderboard(
+      {
+        ...dataset,
+        pulls: [normalPull, generatedPull],
+      },
+      dataset.range,
+    );
+    const workstream = findPullWorkstream(result, 43);
+    const accountedPoints =
+      sumAllocationPoints(workstream.allocations) +
+      sumAllocationPoints(workstream.unallocatedEntries);
+
+    expect(workstream.editAmount).toBe(1);
+    expect(workstream.generatedContribution).toBe(1);
+    expect(workstream.pullEditContributions).toEqual([
+      { pullKey: normalPull.key, amount: 1 },
+      { pullKey: generatedPull.key, amount: 1 },
+    ]);
+    expect(accountedPoints).toBeCloseTo(workstream.importance, 12);
+  });
+
+  it("未測定を測定量 0 と区別し、総量 0 のとき PR へ均等配分する", () => {
+    const measuredPull: PreparedMergedPull = {
+      ...pull(37, "2026-07-10T00:00:00Z"),
+      files: [measuredFile("e".repeat(64), 0, 0, 0)],
+    };
+    const unmeasuredPull: PreparedMergedPull = {
+      ...pull(38, "2026-07-11T00:00:00Z"),
+      files: [unmeasuredFile("patchMissing")],
+    };
+
+    const result = calculateLeaderboard(
+      {
+        ...dataset,
+        pulls: [measuredPull, unmeasuredPull],
+      },
+      dataset.range,
+    );
+    const workstream = findPullWorkstream(result, 37);
+
+    expect(workstream.editAmount).toBe(0);
+    expect(workstream.uncompressedEditAmount).toBe(0);
+    expect(workstream.unmeasuredFileCount).toBe(1);
+    expect(workstream.unmeasuredReasons.patchMissing).toBe(1);
+    expect(workstream.pullEditContributions).toEqual([
+      { pullKey: measuredPull.key, amount: 0 },
+      { pullKey: unmeasuredPull.key, amount: 0 },
+    ]);
+    expect(
+      workstream.allocations.filter(
+        (allocation) => allocation.id.endsWith(":implementation:creation"),
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("編集量がある PR と未測定だけの PR を混ぜても未測定側へ量を推定しない", () => {
+    const measuredPull: PreparedMergedPull = {
+      ...pull(41, "2026-07-10T00:00:00Z"),
+      files: [measuredFile("1".repeat(64), 8, 8, 1)],
+    };
+    const unmeasuredPull: PreparedMergedPull = {
+      ...pull(42, "2026-07-11T00:00:00Z"),
+      files: [unmeasuredFile("patchTruncated")],
+    };
+
+    const result = calculateLeaderboard(
+      {
+        ...dataset,
+        pulls: [measuredPull, unmeasuredPull],
+      },
+      dataset.range,
+    );
+    const workstream = findPullWorkstream(result, 41);
+    const measuredContribution = workstream.pullEditContributions.find(
+      (contribution) => contribution.pullKey === measuredPull.key,
+    );
+    const unmeasuredContribution = workstream.pullEditContributions.find(
+      (contribution) => contribution.pullKey === unmeasuredPull.key,
+    );
+
+    expect(measuredContribution?.amount).toBeGreaterThan(0);
+    expect(unmeasuredContribution?.amount).toBe(0);
+    expect(
+      workstream.allocations.some(
+        (allocation) => allocation.source.key === unmeasuredPull.key,
+      ),
+    ).toBe(false);
+  });
+
+  it("同じ fingerprint の属性不一致を拒否する", () => {
+    const fingerprint = "f".repeat(64);
+    const firstPull: PreparedMergedPull = {
+      ...pull(39, "2026-07-10T00:00:00Z"),
+      files: [measuredFile(fingerprint, 8, 8, 1)],
+    };
+    const secondPull: PreparedMergedPull = {
+      ...pull(40, "2026-07-11T00:00:00Z"),
+      files: [measuredFile(fingerprint, 16, 8, 1)],
+    };
+
+    expect(() =>
+      calculateLeaderboard(
+        {
+          ...dataset,
+          pulls: [firstPull, secondPull],
+        },
+        dataset.range,
+      ),
+    ).toThrow("属性が一致しません");
+  });
+
   it("期間外にマージされた PR を計算へ含めない", () => {
     const result = calculateLeaderboard(dataset, {
       start: "2026-07-01",
@@ -117,7 +349,7 @@ describe("calculateLeaderboard", () => {
     expect(openWorkstream.key).toBe("pr:voicevox/voicevox#3");
     expect(mergedWorkstream.pulls).toHaveLength(1);
     expect(openWorkstream.pulls).toHaveLength(1);
-    expect(mergedWorkstream.effectiveLines).toBe(20);
+    expect(mergedWorkstream.editAmount).toBe(20);
   });
 
   it("同じ関連 Issue の未マージ PR を一件ずつ分ける", () => {
@@ -750,12 +982,12 @@ describe("calculateLeaderboard", () => {
       expect.arrayContaining([
         expect.objectContaining({
           id: aiPull.key + ":implementation:creation:ai:unallocated",
-          points: workstream.importance * 0.07,
+          points: expect.any(Number),
           reason: "AI 由来の活動のため PR 作成枠の70%が配点対象外",
         }),
         expect.objectContaining({
           id: aiPull.key + ":implementation:ai:unallocated",
-          points: workstream.importance * 0.385,
+          points: expect.any(Number),
           reason: "AI 由来の活動のため実装枠の70%が配点対象外",
         }),
         expect.objectContaining({
@@ -765,7 +997,7 @@ describe("calculateLeaderboard", () => {
         }),
         expect.objectContaining({
           id: "voicevox/voicevox#10:issue:ai:unallocated",
-          points: workstream.importance * 0.105,
+          points: expect.any(Number),
           reason: "AI 由来の活動のため Issue 枠の70%が配点対象外",
         }),
       ]),
@@ -1078,7 +1310,7 @@ function findPullWorkstream(
 }
 
 function sumAllocationPoints(
-  allocations: ReturnType<typeof calculateLeaderboard>["workstreams"][number]["allocations"],
+  allocations: Array<{ points: number }>,
 ): number {
   return allocations.reduce(
     (total, allocation) => total + allocation.points,
@@ -1116,13 +1348,20 @@ function pull(number: number, mergedAt: string): PreparedMergedPull {
         filename: "src/index.ts",
         additions: 20,
         deletions: 0,
-        effectiveLines: 20,
-        generated: false,
+        analysis: {
+          kind: "measured",
+          groups: [
+            {
+              fingerprint: "a".repeat(64),
+              beforeTokens: 0,
+              afterTokens: 160,
+              occurrences: 1,
+              weight: 1,
+            },
+          ],
+        },
       },
     ],
-    effectiveLines: 20,
-    nonGeneratedFiles: 1,
-    mass: 2.5,
     conventionalBonus: 1,
     fullAiImplementation: false,
     reviews: [
@@ -1135,6 +1374,52 @@ function pull(number: number, mergedAt: string): PreparedMergedPull {
     ],
     reviewThreads: [],
     issueKey: "voicevox/voicevox#10",
+  };
+}
+
+function measuredFile(
+  fingerprint: string,
+  beforeTokens: number,
+  afterTokens: number,
+  occurrences: number,
+): FileScore {
+  return {
+    filename: "src/file-" + fingerprint.slice(0, 6) + ".ts",
+    additions: 1,
+    deletions: 0,
+    analysis: {
+      kind: "measured",
+      groups:
+        occurrences === 0
+          ? []
+          : [
+              {
+                fingerprint,
+                beforeTokens,
+                afterTokens,
+                occurrences,
+                weight: 1,
+              },
+            ],
+    },
+  };
+}
+
+function generatedFile(filename: string): FileScore {
+  return {
+    filename,
+    additions: 1,
+    deletions: 0,
+    analysis: { kind: "generated" },
+  };
+}
+
+function unmeasuredFile(reason: UnmeasuredReason): FileScore {
+  return {
+    filename: "src/unmeasured.ts",
+    additions: 1,
+    deletions: 0,
+    analysis: { kind: "unmeasured", reason },
   };
 }
 

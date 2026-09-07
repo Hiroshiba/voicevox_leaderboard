@@ -5,8 +5,10 @@ import type {
   DateRange,
   PreparedPull,
   PullOutcome,
+  UnmeasuredReason,
 } from "../domain/model.ts";
 import {
+  calculateEditMeasurementSummary,
   getPullScoringDate,
   resolvePullOutcomeAtRangeEnd,
 } from "../domain/scoring.ts";
@@ -78,10 +80,65 @@ function formatDate(value: string): string {
   }).format(new Date(value));
 }
 
-function formatLines(lines: number): string {
+function formatAmount(amount: number): string {
   return new Intl.NumberFormat("ja-JP", {
     maximumFractionDigits: 1,
-  }).format(lines);
+  }).format(amount);
+}
+
+function pullMeasurementLabel(pull: PreparedPull): string {
+  const summary = calculateEditMeasurementSummary(pull.files);
+  const unmeasured =
+    summary.unmeasuredFileCount === 0
+      ? ""
+      : "、未測定 " +
+        summary.unmeasuredFileCount +
+        " 件" +
+        " " +
+        unmeasuredReasonsLabel(summary.unmeasuredReasons);
+  return (
+    "通常 " +
+    formatAmount(summary.uncompressedEditAmount) +
+    "、PR内圧縮後 " +
+    formatAmount(summary.editAmount) +
+    "、生成物 " +
+    summary.generatedFileCount +
+    " 件" +
+    unmeasured
+  );
+}
+
+function unmeasuredReasonsLabel(
+  reasons: Record<UnmeasuredReason, number>,
+): string {
+  const labels: string[] = [];
+  for (const reason of [
+    "patchMissing",
+    "patchTruncated",
+    "binary",
+    "unsupported",
+  ] satisfies UnmeasuredReason[]) {
+    const count = reasons[reason];
+    if (count > 0) {
+      labels.push(unmeasuredReasonLabel(reason) + " " + count + " 件");
+    }
+  }
+  return labels.join("、");
+}
+
+function unmeasuredReasonLabel(reason: UnmeasuredReason): string {
+  switch (reason) {
+    case "patchMissing":
+      return "patch なし";
+    case "patchTruncated":
+      return "patch 不完全";
+    case "binary":
+      return "バイナリ";
+    case "unsupported":
+      return "未対応形式";
+    default:
+      throw new UnreachableError(reason);
+  }
 }
 </script>
 
@@ -138,7 +195,7 @@ function formatLines(lines: number): string {
           <div class="text-sm text-muted md:text-right">
             <p>{{ pullDateLabel(pull) }}</p>
             <p class="mt-1 text-xs">
-              有効変更 {{ formatLines(pull.effectiveLines) }} 行
+              {{ pullMeasurementLabel(pull) }}
             </p>
           </div>
         </a>

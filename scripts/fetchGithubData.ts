@@ -16,6 +16,7 @@ import {
   isFullAiRepository,
   parseFullAiRepositories,
 } from "../src/domain/fullAiRepositories.ts";
+import { analyzeFileChange } from "./analyzeDiff.ts";
 import type {
   Actor,
   DateRange,
@@ -31,11 +32,7 @@ import {
   extractRelatedIssueReferences,
   type GithubReference,
 } from "../src/domain/references.ts";
-import {
-  calculateConventionalBonus,
-  calculateFileScore,
-  calculatePullMass,
-} from "../src/domain/scoring.ts";
+import { calculateConventionalBonus } from "../src/domain/scoring.ts";
 
 const organization = "VOICEVOX";
 const githubApiBaseUrl = "https://api.github.com";
@@ -55,7 +52,7 @@ const fullAiRepositoriesPath = new URL(
   "../config/fullAiRepositories.json",
   import.meta.url,
 );
-const cacheFormatVersion = 2;
+const cacheFormatVersion = 3;
 const coreConcurrency = 8;
 const searchIntervalMilliseconds = 2100;
 const retryableStatuses = new Set([429, 502, 503, 504]);
@@ -129,6 +126,9 @@ const pullFileSchema = z.object({
   filename: z.string().min(1),
   additions: z.number().int().nonnegative(),
   deletions: z.number().int().nonnegative(),
+  previous_filename: z.string().min(1).nullable().optional(),
+  sha: z.string().min(1).nullable().optional(),
+  patch: z.string().nullable().optional(),
 });
 
 const pullReviewSchema = z.object({
@@ -1120,9 +1120,12 @@ async function main(): Promise<void> {
   const issues = (await builder.prepareIssues()).sort((left, right) =>
     left.key.localeCompare(right.key),
   );
+  const unmeasuredFileCount = pulls
+    .flatMap((pull) => pull.files)
+    .filter((file) => file.analysis.kind === "unmeasured").length;
 
   const dataset: LeaderboardDataset = {
-    schemaVersion: 4,
+    schemaVersion: 5,
     organization,
     generatedAt: new Date().toISOString(),
     range: options.range,
@@ -1148,6 +1151,9 @@ async function main(): Promise<void> {
       "複数 PR の Conventional Commits 補正は、PR 分割による加点を防ぐため最大値を一度だけ使います。",
       "共同作者は GitHub が関連付けたコミット作者と GitHub noreply 形式の Co-authored-by から解決します。",
       "フルAI実装かどうかはリポジトリ単位の設定で決め、該当する PR の作成、実装、レビュー、関連 Issue と独立 Issue の活動へ 0.3 倍の係数を適用します。PR ごとの AI 利用は判定に使いません。",
+      "字句差分を取得できなかった変更ファイルは未測定として扱います。未測定の変更ファイルは " +
+        unmeasuredFileCount +
+        " 件です。",
     ],
     acquisition: client.getAcquisitionStats(),
   };
@@ -1297,10 +1303,20 @@ export function preparePull(
     key + " の作者を取得できません。",
   );
   const files = bundle.files.map((file) =>
-    calculateFileScore(file, fullAiImplementation),
+    analyzeFileChange(
+      {
+        filename: file.filename,
+        additions: file.additions,
+        deletions: file.deletions,
+        ...(file.patch == null ? {} : { patch: file.patch }),
+        ...(file.previous_filename == null
+          ? {}
+          : { previousFilename: file.previous_filename }),
+        ...(file.sha == null ? {} : { sha: file.sha }),
+      },
+      fullAiImplementation,
+    ),
   );
-  const effectiveLines = sum(files.map((file) => file.effectiveLines));
-  const nonGeneratedFiles = files.filter((file) => file.generated === false).length;
   const body = bundle.pull.body ?? "";
   return {
     key,
@@ -1314,9 +1330,6 @@ export function preparePull(
     authorIsHuman: isHumanUser(author),
     coauthors: extractCoauthors(bundle.commits, author.login),
     files,
-    effectiveLines,
-    nonGeneratedFiles,
-    mass: calculatePullMass(effectiveLines, nonGeneratedFiles),
     conventionalBonus: calculateConventionalBonus(
       bundle.pull.title,
       body,
@@ -1736,10 +1749,6 @@ async function mapWithConcurrency<T, R>(
   return results
     .sort((left, right) => left.index - right.index)
     .map((result) => result.value);
-}
-
-function sum(values: number[]): number {
-  return values.reduce((total, value) => total + value, 0);
 }
 
 async function wait(milliseconds: number): Promise<void> {

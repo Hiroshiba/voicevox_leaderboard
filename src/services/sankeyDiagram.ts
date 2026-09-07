@@ -1,4 +1,5 @@
 import { assertNonNullable, UnreachableError } from "../domain/errors.ts";
+import { calculatePullEditContributionRatios } from "../domain/scoring.ts";
 import type {
   Actor,
   ContributionKind,
@@ -342,18 +343,22 @@ function collectWorkstreamFlows(
   );
   const issueReference: SourceReference = { type: "issue", key: issue.key };
   const issueId = addReferenceNode(builder, issueReference, issue.title);
-  const totalMass = sum(workstream.pulls.map((pull) => pull.mass));
-  if (totalMass <= 0) {
-    throw new Error(workstream.key + " の PR 質量が正の値ではありません。");
-  }
+  const pullRatios = calculatePullEditContributionRatios(
+    workstream.pullEditContributions,
+  );
   for (const pull of workstream.pulls) {
-    if (pull.mass <= 0) {
-      throw new Error(pull.key + " の PR 質量が正の値ではありません。");
+    const pullRatio = pullRatios.get(pull.key);
+    assertNonNullable(
+      pullRatio,
+      workstream.key + " の PR 編集寄与量比率がありません。",
+    );
+    if (pullRatio === 0) {
+      continue;
     }
     const pullReference: SourceReference = { type: "pull", key: pull.key };
     const pullId = addReferenceNode(builder, pullReference, pull.title);
     for (const allocation of issueAllocations) {
-      const points = allocation.points * (pull.mass / totalMass);
+      const points = allocation.points * pullRatio;
       const selected = issueInputMatchesSelection(
         builder.selection,
         workstream,

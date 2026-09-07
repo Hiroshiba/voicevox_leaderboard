@@ -2,12 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   calculateAiActivityCredit,
   calculateConventionalBonus,
-  calculateFileScore,
+  calculateEditGroupAmount,
   calculateImplementationReviewAssurance,
   calculateImplementationStateCredit,
   calculateImportance,
-  calculatePullMass,
+  calculatePullEditContributionRatios,
   calculateStandaloneIssueScore,
+  calculateUncompressedEditGroupAmount,
   contributionKinds,
   getPullScoringDate,
   resolvePullOutcomeAtRangeEnd,
@@ -40,93 +41,69 @@ const basePull: PreparedMergedPull = {
   authorIsHuman: true,
   coauthors: [],
   files: [],
-  effectiveLines: 20,
-  nonGeneratedFiles: 1,
-  mass: 2.5,
   conventionalBonus: 1,
   fullAiImplementation: false,
   reviews: [],
   reviewThreads: [],
 };
 
-describe("calculateFileScore", () => {
-  it("通常ファイルは 200 行を上限にする", () => {
+describe("calculateEditGroupAmount", () => {
+  it("編集グループの反復を対数で圧縮する", () => {
     expect(
-      calculateFileScore({
-        filename: "src/App.vue",
-        additions: 180,
-        deletions: 80,
-      }, false),
-    ).toMatchObject({
-      effectiveLines: 200,
-      generated: false,
-    });
+      calculateEditGroupAmount({
+        fingerprint: "a".repeat(64),
+        beforeTokens: 8,
+        afterTokens: 16,
+        occurrences: 4,
+        weight: 0.5,
+      }),
+    ).toBe(1.5);
   });
 
-  it("文章ファイルは 0.5 倍にする", () => {
+  it("トークン数が少ない編集は最小量 1 を使う", () => {
     expect(
-      calculateFileScore({
-        filename: "docs/guide.md",
-        additions: 40,
-        deletions: 10,
-      }, false).effectiveLines,
-    ).toBe(25);
+      calculateEditGroupAmount({
+        fingerprint: "a".repeat(64),
+        beforeTokens: 0,
+        afterTokens: 0,
+        occurrences: 1,
+        weight: 1,
+      }),
+    ).toBe(1);
   });
+});
 
-  it("lockfile は 0.05 倍にする", () => {
+describe("calculateUncompressedEditGroupAmount", () => {
+  it("反復を圧縮しない編集量を返す", () => {
     expect(
-      calculateFileScore({
-        filename: "pnpm-lock.yaml",
-        additions: 300,
-        deletions: 100,
-      }, false),
-    ).toMatchObject({
-      effectiveLines: 10,
-      generated: true,
-    });
-  });
-
-  it("フルAI実装リポジトリのファイルは生成物として 0.05 倍にする", () => {
-    expect(
-      calculateFileScore({
-        filename: "src/App.vue",
-        additions: 180,
-        deletions: 80,
-      }, true),
-    ).toMatchObject({
-      effectiveLines: 10,
-      generated: true,
-    });
-  });
-
-  it("拡張子が lock のファイルも生成物として扱う", () => {
-    expect(
-      calculateFileScore({
-        filename: "poetry.lock",
-        additions: 100,
-        deletions: 0,
-      }, false).effectiveLines,
-    ).toBe(5);
+      calculateUncompressedEditGroupAmount({
+        fingerprint: "a".repeat(64),
+        beforeTokens: 8,
+        afterTokens: 16,
+        occurrences: 4,
+        weight: 0.5,
+      }),
+    ).toBe(4);
   });
 });
 
 describe("calculateImportance", () => {
-  it("小規模な E2E 追加を提案書どおり約 3.7 と評価する", () => {
+  it("編集量と生成物の寄与から評価する", () => {
     const importance = calculateImportance({
-      effectiveLines: 23,
-      nonGeneratedFiles: 1,
+      editAmount: 23,
+      generatedContribution: 1,
       repositoryCount: 1,
       conventionalBonus: 0.5,
     });
 
-    expect(importance).toBeCloseTo(3.66, 1);
+    expect(importance).toBeCloseTo(4.15, 1);
   });
 
   it("巨大な成果でも 15 を超えない", () => {
     expect(
       calculateImportance({
-        effectiveLines: 100000,
-        nonGeneratedFiles: 2000,
+        editAmount: 100000,
+        generatedContribution: 1,
         repositoryCount: 20,
         conventionalBonus: 1.5,
       }),
@@ -134,9 +111,33 @@ describe("calculateImportance", () => {
   });
 });
 
-describe("calculatePullMass", () => {
-  it("変更規模を対数評価する", () => {
-    expect(calculatePullMass(20, 1)).toBe(2.5);
+describe("calculatePullEditContributionRatios", () => {
+  it("PR ごとの編集寄与量から比率を返す", () => {
+    expect(
+      calculatePullEditContributionRatios([
+        { pullKey: "pr-1", amount: 2 },
+        { pullKey: "pr-2", amount: 1 },
+      ]),
+    ).toEqual(
+      new Map([
+        ["pr-1", 2 / 3],
+        ["pr-2", 1 / 3],
+      ]),
+    );
+  });
+
+  it("合計量が 0 のとき PR 均等配分へ切り替える", () => {
+    expect(
+      calculatePullEditContributionRatios([
+        { pullKey: "pr-1", amount: 0 },
+        { pullKey: "pr-2", amount: 0 },
+      ]),
+    ).toEqual(
+      new Map([
+        ["pr-1", 0.5],
+        ["pr-2", 0.5],
+      ]),
+    );
   });
 });
 

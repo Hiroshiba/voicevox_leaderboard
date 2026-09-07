@@ -25,12 +25,32 @@ export interface RepositorySummary {
   fullAiImplementation: boolean;
 }
 
+export interface EditGroup {
+  fingerprint: string;
+  beforeTokens: number;
+  afterTokens: number;
+  occurrences: number;
+  weight: 0.5 | 1;
+}
+
+export type UnmeasuredReason =
+  | "patchMissing"
+  | "patchTruncated"
+  | "binary"
+  | "unsupported";
+
+export type FileAnalysis =
+  | { kind: "measured"; groups: EditGroup[] }
+  | { kind: "generated" }
+  | { kind: "unmeasured"; reason: UnmeasuredReason };
+
 export interface FileScore {
   filename: string;
   additions: number;
   deletions: number;
-  effectiveLines: number;
-  generated: boolean;
+  previousFilename?: string | undefined;
+  sha?: string | undefined;
+  analysis: FileAnalysis;
 }
 
 export type PreparedReviewState =
@@ -72,9 +92,6 @@ export interface PreparedPull {
   authorIsHuman: boolean;
   coauthors: Actor[];
   files: FileScore[];
-  effectiveLines: number;
-  nonGeneratedFiles: number;
-  mass: number;
   conventionalBonus: number;
   fullAiImplementation: boolean;
   reviews: PreparedReview[];
@@ -120,7 +137,7 @@ export interface AcquisitionStats {
 }
 
 export interface LeaderboardDataset {
-  schemaVersion: 4;
+  schemaVersion: 5;
   organization: "VOICEVOX";
   generatedAt: string;
   range: DateRange;
@@ -158,14 +175,24 @@ export interface IssueReference {
   title: string;
 }
 
+export interface PullEditContribution {
+  pullKey: string;
+  amount: number;
+}
+
 export interface WorkstreamScore {
   key: string;
   title: string;
   source: SourceReference;
   issue?: IssueReference | undefined;
   pulls: PreparedPull[];
-  effectiveLines: number;
-  nonGeneratedFiles: number;
+  uncompressedEditAmount: number;
+  editAmount: number;
+  generatedContribution: number;
+  generatedFileCount: number;
+  unmeasuredFileCount: number;
+  unmeasuredReasons: Record<UnmeasuredReason, number>;
+  pullEditContributions: PullEditContribution[];
   repositoryCount: number;
   conventionalBonus: number;
   importance: number;

@@ -109,6 +109,29 @@ describe("DatasetBuilder.fetchPullBundle", () => {
     );
     expect(scenario.graphqlRequestCount).toBe(1);
   });
+
+  it("patch 付き変更ファイルをキャッシュから再利用する", async () => {
+    const scenario = await createFetchScenario(101, 101);
+
+    const firstBundle = await scenario.builder.fetchPullBundle({
+      repository: "voicevox/voicevox_vvm",
+      number: 56,
+    });
+    const secondBundle = await scenario.builder.fetchPullBundle({
+      repository: "voicevox/voicevox_vvm",
+      number: 56,
+    });
+
+    expect(firstBundle.files[0]?.patch).toBe("@@ -1 +1 @@\n-old\n+new\n");
+    expect(secondBundle.files[0]?.patch).toBe(
+      "@@ -1 +1 @@\n-old\n+new\n",
+    );
+    expect(
+      scenario.fileRequestHeaders.slice(-2).map((headers) =>
+        headers.get("If-None-Match"),
+      ),
+    ).toEqual(["\"files-page-1\"", "\"files-page-2\""]);
+  });
 });
 
 describe("preparePull", () => {
@@ -227,7 +250,11 @@ async function createFetchScenario(
   const files = Array.from({ length: 101 }, (_, index) => ({
     filename: "file-" + index + ".txt",
     additions: 1,
-    deletions: 0,
+    deletions: index === 0 ? 1 : 0,
+    sha: "blob-" + index,
+    ...(index === 0
+      ? { patch: "@@ -1 +1 @@\n-old\n+new\n" }
+      : {}),
   }));
   const fetchMock = vi.fn(
     async (
@@ -251,10 +278,18 @@ async function createFetchScenario(
         fileRequestHeaders.push(headers);
         const page = url.searchParams.get("page");
         if (page === "1") {
-          return createJsonResponse(files.slice(0, 100), '"files-page-1"');
+          return createCachedJsonResponse(
+            files.slice(0, 100),
+            '"files-page-1"',
+            headers,
+          );
         }
         if (page === "2") {
-          return createJsonResponse(files.slice(100), '"files-page-2"');
+          return createCachedJsonResponse(
+            files.slice(100),
+            '"files-page-2"',
+            headers,
+          );
         }
         throw new Error("想定外の変更ファイル一覧ページです。" + page);
       }
@@ -343,4 +378,21 @@ function createJsonResponse(payload: unknown, etag: string): Response {
       "Last-Modified": "Mon, 10 Aug 2026 00:00:00 GMT",
     },
   });
+}
+
+function createCachedJsonResponse(
+  payload: unknown,
+  etag: string,
+  requestHeaders: Headers,
+): Response {
+  if (requestHeaders.get("If-None-Match") === etag) {
+    return new Response(null, {
+      status: 304,
+      headers: {
+        ETag: etag,
+        "Last-Modified": "Mon, 10 Aug 2026 00:00:00 GMT",
+      },
+    });
+  }
+  return createJsonResponse(payload, etag);
 }

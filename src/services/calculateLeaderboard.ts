@@ -3,27 +3,33 @@ import type {
   Actor,
   ContributorScore,
   DateRange,
+  EditGroup,
   EvidenceKind,
   IssueReference,
   LeaderboardDataset,
   LeaderboardResult,
   PreparedIssue,
   PreparedPull,
+  PullEditContribution,
   PullOutcome,
   ScoreAllocation,
   ScoreEntry,
   SourceReference,
   StandaloneIssueScore,
+  UnmeasuredReason,
   UnallocatedScore,
   WorkstreamScore,
 } from "../domain/model.ts";
 import { isFullAiRepository } from "../domain/fullAiRepositories.ts";
 import {
   calculateAiActivityCredit,
+  calculateEditGroupAmount,
   calculateImplementationReviewAssurance,
   calculateImplementationStateCredit,
   calculateImportance,
   calculateStandaloneIssueScore,
+  calculatePullEditContributionRatios,
+  calculateUncompressedEditGroupAmount,
   getPullScoringDate,
   resolvePullOutcomeAtRangeEnd,
   totalAllocations,
@@ -82,6 +88,24 @@ interface AllocationResult {
 
 interface ReviewOrigin extends WeightedOrigin {
   fullAiImplementation: boolean;
+}
+
+interface EditGroupAggregate {
+  fingerprint: string;
+  beforeTokens: number;
+  afterTokens: number;
+  weight: EditGroup["weight"];
+  occurrencesByPull: Map<string, number>;
+}
+
+interface WorkstreamEditSummary {
+  uncompressedEditAmount: number;
+  editAmount: number;
+  generatedContribution: number;
+  generatedFileCount: number;
+  unmeasuredFileCount: number;
+  unmeasuredReasons: Record<UnmeasuredReason, number>;
+  pullEditContributions: PullEditContribution[];
 }
 
 /** 事前取得データを指定期間のリーダーボードへ変換する。 */
@@ -214,12 +238,9 @@ function calculateWorkstream(
   range: DateRange,
   fullAiRepositories: Set<string>,
 ): WorkstreamScore {
-  const effectiveLines = sum(
-    group.pulls.map(({ pull }) => pull.effectiveLines),
-  );
-  const nonGeneratedFiles = sum(
-    group.pulls.map(({ pull }) => pull.nonGeneratedFiles),
-  );
+  const firstScoringPull = group.pulls[0];
+  assertNonNullable(firstScoringPull, "ワークストリームに PR がありません。");
+  const editSummary = calculateWorkstreamEditSummary(group);
   const repositoryCount = new Set(
     group.pulls.map(({ pull }) => pull.repository.toLowerCase()),
   ).size;
@@ -227,20 +248,31 @@ function calculateWorkstream(
     ...group.pulls.map(({ pull }) => pull.conventionalBonus),
   );
   const importance = calculateImportance({
-    effectiveLines,
-    nonGeneratedFiles,
+    editAmount: editSummary.editAmount,
+    generatedContribution: editSummary.generatedContribution,
     repositoryCount,
     conventionalBonus,
   });
-  const firstScoringPull = group.pulls[0];
-  assertNonNullable(firstScoringPull, "ワークストリームに PR がありません。");
+  const pullRatios = calculatePullEditContributionRatios(
+    editSummary.pullEditContributions,
+  );
   const merged = isMergedWorkstream(group);
   const scoringIssue = merged ? group.issue : undefined;
   const title = scoringIssue?.title ?? firstScoringPull.pull.title;
   const source = createSourceReference(scoringIssue, firstScoringPull.pull);
   const sourceTitle = createSourceTitle(scoringIssue, firstScoringPull.pull);
-  const pullCreation = allocatePullCreation(group, importance, range);
-  const implementation = allocateImplementation(group, importance, range);
+  const pullCreation = allocatePullCreation(
+    group,
+    importance,
+    range,
+    pullRatios,
+  );
+  const implementation = allocateImplementation(
+    group,
+    importance,
+    range,
+    pullRatios,
+  );
   const review = allocateReviews(
     group,
     importance,
@@ -282,8 +314,7 @@ function calculateWorkstream(
     source,
     ...(group.issue == null ? {} : { issue: toIssueReference(group.issue) }),
     pulls: group.pulls.map(({ pull }) => pull),
-    effectiveLines,
-    nonGeneratedFiles,
+    ...editSummary,
     repositoryCount,
     conventionalBonus,
     importance,
@@ -306,20 +337,154 @@ function calculateWorkstream(
   };
 }
 
+function calculateWorkstreamEditSummary(
+  group: WorkstreamGroup,
+): WorkstreamEditSummary {
+  const aggregates = new Map<string, EditGroupAggregate>();
+  const contributionByPull = new Map<string, number>();
+  const generatedPullKeys = new Set<string>();
+  const unmeasuredReasons = createUnmeasuredReasonCounts();
+  let uncompressedEditAmount = 0;
+  let editAmount = 0;
+  let generatedFileCount = 0;
+  let unmeasuredFileCount = 0;
+
+  for (const { pull } of group.pulls) {
+    if (contributionByPull.has(pull.key)) {
+      throw new Error(group.key + " に同じ PR が複数含まれています。");
+    }
+    contributionByPull.set(pull.key, 0);
+    for (const file of pull.files) {
+      switch (file.analysis.kind) {
+        case "measured":
+          for (const editGroup of file.analysis.groups) {
+            uncompressedEditAmount +=
+              calculateUncompressedEditGroupAmount(editGroup);
+            const current = aggregates.get(editGroup.fingerprint);
+            if (current == null) {
+              aggregates.set(editGroup.fingerprint, {
+                fingerprint: editGroup.fingerprint,
+                beforeTokens: editGroup.beforeTokens,
+                afterTokens: editGroup.afterTokens,
+                weight: editGroup.weight,
+                occurrencesByPull: new Map([[pull.key, editGroup.occurrences]]),
+              });
+              continue;
+            }
+            if (
+              current.beforeTokens !== editGroup.beforeTokens ||
+              current.afterTokens !== editGroup.afterTokens ||
+              current.weight !== editGroup.weight
+            ) {
+              throw new Error(
+                "編集グループ " +
+                  editGroup.fingerprint +
+                  " の属性が一致しません。",
+              );
+            }
+            const occurrences =
+              current.occurrencesByPull.get(pull.key) ?? 0;
+            current.occurrencesByPull.set(
+              pull.key,
+              occurrences + editGroup.occurrences,
+            );
+          }
+          break;
+        case "generated":
+          generatedFileCount += 1;
+          generatedPullKeys.add(pull.key);
+          break;
+        case "unmeasured":
+          unmeasuredFileCount += 1;
+          unmeasuredReasons[file.analysis.reason] += 1;
+          break;
+        default:
+          throw new UnreachableError(file.analysis);
+      }
+    }
+  }
+
+  for (const aggregate of aggregates.values()) {
+    const occurrences = sum([...aggregate.occurrencesByPull.values()]);
+    const amount = calculateEditGroupAmount({
+      fingerprint: aggregate.fingerprint,
+      beforeTokens: aggregate.beforeTokens,
+      afterTokens: aggregate.afterTokens,
+      occurrences,
+      weight: aggregate.weight,
+    });
+    editAmount += amount;
+    for (const [pullKey, pullOccurrences] of aggregate.occurrencesByPull) {
+      const current = contributionByPull.get(pullKey);
+      assertNonNullable(
+        current,
+        group.key + " の編集グループに対応する PR がありません。",
+      );
+      contributionByPull.set(
+        pullKey,
+        current + amount * (pullOccurrences / occurrences),
+      );
+    }
+  }
+
+  const generatedContribution = generatedPullKeys.size > 0 ? 1 : 0;
+  if (generatedPullKeys.size > 0) {
+    const generatedAmount = generatedContribution / generatedPullKeys.size;
+    for (const pullKey of generatedPullKeys) {
+      const current = contributionByPull.get(pullKey);
+      assertNonNullable(
+        current,
+        group.key + " の生成物に対応する PR がありません。",
+      );
+      contributionByPull.set(pullKey, current + generatedAmount);
+    }
+  }
+
+  return {
+    uncompressedEditAmount,
+    editAmount,
+    generatedContribution,
+    generatedFileCount,
+    unmeasuredFileCount,
+    unmeasuredReasons,
+    pullEditContributions: group.pulls.map(({ pull }) => {
+      const amount = contributionByPull.get(pull.key);
+      assertNonNullable(
+        amount,
+        group.key + " の PR 編集寄与量がありません。",
+      );
+      return { pullKey: pull.key, amount };
+    }),
+  };
+}
+
+function createUnmeasuredReasonCounts(): Record<UnmeasuredReason, number> {
+  return {
+    patchMissing: 0,
+    patchTruncated: 0,
+    binary: 0,
+    unsupported: 0,
+  };
+}
+
 function allocatePullCreation(
   group: WorkstreamGroup,
   importance: number,
   range: DateRange,
+  pullRatios: Map<string, number>,
 ): AllocationResult {
-  const totalMass = sum(group.pulls.map(({ pull }) => pull.mass));
-  if (totalMass <= 0) {
-    throw new Error("ワークストリームの実装質量が正の値ではありません。");
-  }
-
   const allocations: ScoreAllocation[] = [];
   const unallocatedEntries: UnallocatedScore[] = [];
   for (const { pull } of group.pulls) {
-    const pullPool = 0.1 * importance * (pull.mass / totalMass);
+    const pullRatio = pullRatios.get(pull.key);
+    assertNonNullable(
+      pullRatio,
+      group.key + " の PR 編集寄与量比率がありません。",
+    );
+    const pullPool = 0.1 * importance * pullRatio;
+    if (pullPool === 0) {
+      continue;
+    }
     const activityCredit = calculateAiActivityCredit(
       pull.fullAiImplementation,
     );
@@ -408,17 +573,21 @@ function allocateImplementation(
   group: WorkstreamGroup,
   importance: number,
   range: DateRange,
+  pullRatios: Map<string, number>,
 ): AllocationResult {
-  const totalMass = sum(group.pulls.map(({ pull }) => pull.mass));
-  if (totalMass <= 0) {
-    throw new Error("ワークストリームの実装質量が正の値ではありません。");
-  }
-
   const allocations: ScoreAllocation[] = [];
   const unallocatedEntries: UnallocatedScore[] = [];
   for (const scoringPull of group.pulls) {
     const { pull, outcome, scoringDate } = scoringPull;
-    const pullPool = 0.55 * importance * (pull.mass / totalMass);
+    const pullRatio = pullRatios.get(pull.key);
+    assertNonNullable(
+      pullRatio,
+      group.key + " の PR 編集寄与量比率がありません。",
+    );
+    const pullPool = 0.55 * importance * pullRatio;
+    if (pullPool === 0) {
+      continue;
+    }
     const source = createPullSource(pull);
     const sourceTitle = createPullTitle(pull);
     if (isDateInRange(scoringDate, range) === false) {
@@ -462,8 +631,9 @@ function allocateImplementation(
       pull.repository +
       "#" +
       pull.number +
-      " の実装質量 " +
-      pull.mass.toFixed(2) +
+      " の編集寄与量の比率 " +
+      (pullRatio * 100).toFixed(2) +
+      "%" +
       " による配分、" +
       creditLabel +
       "として実装枠の" +
